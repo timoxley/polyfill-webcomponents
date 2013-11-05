@@ -1,0 +1,22 @@
+{
+  "name": "polyfill-webcomponents",
+  "version": "0.0.0",
+  "description": "webcomponent polyfills courtesy of polymer",
+  "main": "index.js",
+  "scripts": {
+    "prepublish": "",
+    "test": ""
+  },
+  "author": "Tim Oxley",
+  "keywords": [
+    "template",
+    "shadowdom",
+    "observe",
+    "WeakMap"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "~0.5.5",
+    "browserify": "~2.35.0"
+  }
+}

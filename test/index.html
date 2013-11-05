@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+  <body>
+    <h1>Model-driven Views</h1>
+    <ul>
+      <template id="greeting" repeat="{{ salutations }}">
+        <li>{{ what }}: <input type="text" value="{{ who }}"></li>
+      </template>
+    </ul>
+    <script src="build.js"></script>
+  <body>
+</html>
