@@ -1,11 +1,11 @@
 {
   "name": "polyfill-webcomponents",
-  "version": "0.0.0",
-  "description": "webcomponent polyfills courtesy of polymer",
+  "version": "0.0.1",
+  "description": "Web Component Polyfills courtesy of Polymer",
   "main": "index.js",
   "scripts": {
-    "prepublish": "",
-    "test": ""
+    "prepublish": "make -B",
+    "test": "make test"
   },
   "author": "Tim Oxley",
   "keywords": [

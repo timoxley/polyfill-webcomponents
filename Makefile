@@ -6,9 +6,6 @@ build:
 	cp pull-all.sh build
 	cd build && sh pull-all.sh
 
-release:
-	npm version 
-
 build/platform: build
 	cd build/platform && npm install && grunt
 
