@@ -1,10 +1,22 @@
 # polyfill-webcomponents
 
-Browserifyable Web Components Polyfills courtesy of [Polymer](https://github.com/Polymer/polymer)
+### Browserify compatible Web Components Polyfills
 
-** This is simply the result of building the 'polymer platform'. ** 
+The 'polymer platform' in a browserify compatible package. Polyfills courtesy of [Polymer](https://github.com/Polymer/polymer)
 
-Due to nature of the browser, encapsulation of these polyfills is not possible. This modifies your entire browser environment with polyfills for:
+Polyfills will be updated to latest development versions weekly.
+
+## Usage
+
+```js
+// polyfill your browser environment
+require('polyfill-webcomponents')
+```
+
+## Features
+
+Due to nature of the browser, proper encapsulation of these polyfills is not possible.
+**This modifies your entire browser environment** with polyfills for:
 
 * CustomElements
 * ShadowDOM
@@ -16,16 +28,15 @@ Due to nature of the browser, encapsulation of these polyfills is not possible. 
 * PointerGestures
 * HTMLImports
 
-Go to [polymer-project.org](http://www.polymer-project.org/) for details of usage.
+Go to [polymer-project.org](http://www.polymer-project.org/) for API details.
 
-## Usage
-
-```js
-// modify your whole environment
-require('polyfill-webcomponents')
-```
 
 ## TODO
 
-* Break these up into more component pieces
+* Break these packages into more isolated components
 * [Convince polymer team to publish these on npm themselves](https://github.com/Polymer/polymer/issues/326#)
+
+## No Fork
+
+If this package does not work as expected, let's work together to fix it; the last thing we need is
+*more* random 3rd parties scattering unofficial Polymer pieces around npm.
