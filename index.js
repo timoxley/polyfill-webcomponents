@@ -1,3 +1,7 @@
+module.exports = (function() {
+
+if (window.Platform) return window.Platform; // prevent double-loading
+
 /* @license
 // Copyright (c) 2012 The Polymer Authors. All rights reserved.
 //
@@ -7172,7 +7176,7 @@ window.templateContent = window.templateContent || function(inTemplate) {
     return ensureScheduled;
   }();
 
-})(this);
+})(window);
 
 // Copyright 2011 Google Inc.
 //
@@ -8339,7 +8343,7 @@ window.templateContent = window.templateContent || function(inTemplate) {
 
   // Polyfill-specific API.
   HTMLTemplateElement.forAllTemplatesFrom_ = forAllTemplatesFrom;
-})(this);
+})(window);
 
 /*
   Copyright (C) 2013 Ariya Hidayat <ariya.hidayat@gmail.com>
@@ -9411,7 +9415,7 @@ window.templateContent = window.templateContent || function(inTemplate) {
     global.esprima = {
         parse: parse
     };
-})(this);
+})(window);
 
 // Copyright 2013 Google Inc.
 //
@@ -9875,7 +9879,7 @@ window.templateContent = window.templateContent || function(inTemplate) {
 
   global.PolymerExpressions = PolymerExpressions;
 
-})(this);
+})(window);
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
@@ -11074,7 +11078,7 @@ if (document.readyState === 'complete' ||
     global.MutationObserver = JsMutationObserver;
 
 
-})(this);
+})(window);
 
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
@@ -14336,4 +14340,9 @@ PointerGestureEvent.prototype.preventTap = function() {
   dispatcher.registerRecognizer('tap', tap);
 })(window.PointerGestures);
 
+
+return window.Platform;
+
+
+})()
 
