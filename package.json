@@ -1,6 +1,6 @@
 {
   "name": "polyfill-webcomponents",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Web Component Polyfills courtesy of Polymer",
   "main": "index.js",
   "scripts": {
@@ -14,9 +14,24 @@
     "observe",
     "WeakMap"
   ],
-  "license": "MIT",
+  "license": "BSD-2-Clause",
   "devDependencies": {
     "http-server": "~0.5.5",
     "browserify": "~2.35.0"
+  },
+  "directories": {
+    "test": "test"
+  },
+  "dependencies": {
+    "http-server": "~0.5.5",
+    "browserify": "~2.35.0",
+    "pkjutil": "~0.0.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/timoxley/polyfill-webcomponents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/timoxley/polyfill-webcomponents/issues"
   }
 }
