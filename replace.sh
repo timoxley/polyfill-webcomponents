@@ -1,14 +1,36 @@
 #!/bin/bash
+
 set -e
-cat build/platform/platform.concat.js > index.js
+
+### Here be some dodgy modifications for browserify compatibility ###
+
+cat build/platform/platform.concat.js > index.src.js
+
 
 # temporary workaround for assumptions about
 # this/window context:
 # https://github.com/Polymer/ShadowDOM/pull/282 
-sed -i bak -e 's/var ShadowDOMPolyfill/window.ShadowDOMPolyfill/' index.js
-sed -i bak -e 's/this.ShadowDOMPolyfill/window.ShadowDOMPolyfill/g' index.js
+sed -i bak -e 's/var ShadowDOMPolyfill/window.ShadowDOMPolyfill/' index.src.js
+sed -i bak -e 's/this.ShadowDOMPolyfill/window.ShadowDOMPolyfill/g' index.src.js
+sed -i bak -e 's/})(this);/})(window);/g' index.src.js
 
 # remove source mapping
-sed -i bak -e 's/\/\/@ sourceMappingURL=platform\.concat.js\.map//g' index.js
+sed -i bak -e 's/\/\/@ sourceMappingURL=platform\.concat.js\.map//g' index.src.js
+# prevent double loading
+# need to wrap in whole thing in closure because browserify/esprima spits "Illegal return statement"
+# on return statement below?
+echo "module.exports = (function() {\n" > index.js
+echo "if (window.Platform) return window.Platform; // prevent double-loading\n" >> index.js
+# inject actual source
+cat index.src.js >> index.js
+# inject export val of window.Plaform.
+# Try encourage people to access proprietary Platform via:
+#   var Platform = require('polyfill-webcomponents')
+# rather than global var window.Plaform
+echo "return window.Platform;\n" >> index.js
+## end closure
+echo "\n})()\n" >> index.js
 
-rm index.jsbak
+# clean up
+rm index.src.jsbak
+rm index.src.js

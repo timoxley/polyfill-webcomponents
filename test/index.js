@@ -1,4 +1,7 @@
-require('../')
+var assert = require('assert')
+
+var Platform = require('../')
+assert.strictEqual(window.Platform, Platform)
 
 document.addEventListener('DOMContentLoaded', function() {
   var t = document.getElementById('greeting');
