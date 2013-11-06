@@ -6,11 +6,20 @@ The 'polymer platform' in a browserify compatible package. Polyfills courtesy of
 
 Polyfills will be updated to latest development versions weekly.
 
+## Installation
+
+```
+> npm install --save polyfill-webcomponents
+```
+
 ## Usage
+
+Use in-browser only with [browserify](https://github.com/substack/node-browserify).
 
 ```js
 // polyfill your browser environment
-require('polyfill-webcomponents')
+var Platform = require('polyfill-webcomponents')
+// Platform is polymer's proprietary namespace, contains some helpers
 ```
 
 ## Features
