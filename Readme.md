@@ -39,6 +39,21 @@ Due to nature of the browser, proper encapsulation of these polyfills is not pos
 
 Go to [polymer-project.org](http://www.polymer-project.org/) for API details.
 
+## Browser Compatibility
+
+These polyfills work ([with caveats](http://www.polymer-project.org/compatibility.html)) in [Evergreen Browsers](http://tomdale.net/2013/05/evergreen-browsers/).
+
+* Chrome
+* Canary
+* Chrome Android
+* Firefox
+* Safari 6+
+* Mobile Safari
+* Internet Explorer 10+
+
+Do the web a favour, insist on only supporting Evergreen Browsers in your upcoming project.
+
+[See Polymer's documentation for more information](http://www.polymer-project.org/compatibility.html).
 
 ## TODO
 
