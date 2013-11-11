@@ -22,11 +22,6 @@
   "directories": {
     "test": "test"
   },
-  "dependencies": {
-    "http-server": "~0.5.5",
-    "browserify": "~2.35.0",
-    "pkjutil": "~0.0.5"
-  },
   "repository": {
     "type": "git",
     "url": "git://github.com/timoxley/polyfill-webcomponents.git"
