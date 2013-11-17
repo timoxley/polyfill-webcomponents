@@ -2,36 +2,6 @@ module.exports = (function() {
 
 if (window.Platform) return window.Platform; // prevent double-loading
 
-/* @license
-// Copyright (c) 2012 The Polymer Authors. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//    * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//    * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//    * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-*/
 /*
  * Copyright 2012 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
@@ -4749,6 +4719,99 @@ window.ShadowDOMPolyfill = {};
 (function(scope) {
   'use strict';
 
+  var registerWrapper = scope.registerWrapper;
+  var unwrap = scope.unwrap;
+  var unwrapIfNeeded = scope.unwrapIfNeeded;
+  var wrap = scope.wrap;
+
+  var OriginalRange = window.Range;
+
+  function Range(impl) {
+    this.impl = impl;
+  }
+  Range.prototype = {
+    get startContainer() {
+      return wrap(this.impl.startContainer);
+    },
+    get endContainer() {
+      return wrap(this.impl.endContainer);
+    },
+    get commonAncestorContainer() {
+      return wrap(this.impl.commonAncestorContainer);
+    },
+    setStart: function(refNode,offset) {
+      this.impl.setStart(unwrapIfNeeded(refNode), offset);
+    },
+    setEnd: function(refNode,offset) {
+      this.impl.setEnd(unwrapIfNeeded(refNode), offset);
+    },
+    setStartBefore: function(refNode) {
+      this.impl.setStartBefore(unwrapIfNeeded(refNode));
+    },
+    setStartAfter: function(refNode) {
+      this.impl.setStartAfter(unwrapIfNeeded(refNode));
+    },
+    setEndBefore: function(refNode) {
+      this.impl.setEndBefore(unwrapIfNeeded(refNode));
+    },
+    setEndAfter: function(refNode) {
+      this.impl.setEndAfter(unwrapIfNeeded(refNode));
+    },
+    selectNode: function(refNode) {
+      this.impl.selectNode(unwrapIfNeeded(refNode));
+    },
+    selectNodeContents: function(refNode) {
+      this.impl.selectNodeContents(unwrapIfNeeded(refNode));
+    },
+    compareBoundaryPoints: function(how, sourceRange) {
+      return this.impl.compareBoundaryPoints(how, unwrap(sourceRange));
+    },
+    extractContents: function() {
+      return wrap(this.impl.extractContents());
+    },
+    cloneContents: function() {
+      return wrap(this.impl.cloneContents());
+    },
+    insertNode: function(node) {
+      this.impl.insertNode(unwrapIfNeeded(node));
+    },
+    surroundContents: function(newParent) {
+      this.impl.surroundContents(unwrapIfNeeded(newParent));
+    },
+    cloneRange: function() {
+      return wrap(this.impl.cloneRange());
+    },
+    isPointInRange: function(node, offset) {
+      return this.impl.isPointInRange(unwrapIfNeeded(node), offset);
+    },
+    comparePoint: function(node, offset) {
+      return this.impl.comparePoint(unwrapIfNeeded(node), offset);
+    },
+    intersectsNode: function(node) {
+      return this.impl.intersectsNode(unwrapIfNeeded(node));
+    }
+  };
+
+  // IE9 does not have createContextualFragment.
+  if (OriginalRange.prototype.createContextualFragment) {
+    Range.prototype.createContextualFragment = function(html) {
+      return wrap(this.impl.createContextualFragment(html));
+    };
+  }
+
+  registerWrapper(window.Range, Range, document.createRange());
+
+  scope.wrappers.Range = Range;
+
+})(window.ShadowDOMPolyfill);
+
+// Copyright 2013 The Polymer Authors. All rights reserved.
+// Use of this source code is goverened by a BSD-style
+// license that can be found in the LICENSE file.
+
+(function(scope) {
+  'use strict';
+
   var GetElementsByInterface = scope.GetElementsByInterface;
   var ParentNodeInterface = scope.ParentNodeInterface;
   var SelectorsInterface = scope.SelectorsInterface;
@@ -5901,99 +5964,6 @@ window.ShadowDOMPolyfill = {};
 (function(scope) {
   'use strict';
 
-  var registerWrapper = scope.registerWrapper;
-  var unwrap = scope.unwrap;
-  var unwrapIfNeeded = scope.unwrapIfNeeded;
-  var wrap = scope.wrap;
-
-  var OriginalRange = window.Range;
-
-  function Range(impl) {
-    this.impl = impl;
-  }
-  Range.prototype = {
-    get startContainer() {
-      return wrap(this.impl.startContainer);
-    },
-    get endContainer() {
-      return wrap(this.impl.endContainer);
-    },
-    get commonAncestorContainer() {
-      return wrap(this.impl.commonAncestorContainer);
-    },
-    setStart: function(refNode,offset) {
-      this.impl.setStart(unwrapIfNeeded(refNode), offset);
-    },
-    setEnd: function(refNode,offset) {
-      this.impl.setEnd(unwrapIfNeeded(refNode), offset);
-    },
-    setStartBefore: function(refNode) {
-      this.impl.setStartBefore(unwrapIfNeeded(refNode));
-    },
-    setStartAfter: function(refNode) {
-      this.impl.setStartAfter(unwrapIfNeeded(refNode));
-    },
-    setEndBefore: function(refNode) {
-      this.impl.setEndBefore(unwrapIfNeeded(refNode));
-    },
-    setEndAfter: function(refNode) {
-      this.impl.setEndAfter(unwrapIfNeeded(refNode));
-    },
-    selectNode: function(refNode) {
-      this.impl.selectNode(unwrapIfNeeded(refNode));
-    },
-    selectNodeContents: function(refNode) {
-      this.impl.selectNodeContents(unwrapIfNeeded(refNode));
-    },
-    compareBoundaryPoints: function(how, sourceRange) {
-      return this.impl.compareBoundaryPoints(how, unwrap(sourceRange));
-    },
-    extractContents: function() {
-      return wrap(this.impl.extractContents());
-    },
-    cloneContents: function() {
-      return wrap(this.impl.cloneContents());
-    },
-    insertNode: function(node) {
-      this.impl.insertNode(unwrapIfNeeded(node));
-    },
-    surroundContents: function(newParent) {
-      this.impl.surroundContents(unwrapIfNeeded(newParent));
-    },
-    cloneRange: function() {
-      return wrap(this.impl.cloneRange());
-    },
-    isPointInRange: function(node, offset) {
-      return this.impl.isPointInRange(unwrapIfNeeded(node), offset);
-    },
-    comparePoint: function(node, offset) {
-      return this.impl.comparePoint(unwrapIfNeeded(node), offset);
-    },
-    intersectsNode: function(node) {
-      return this.impl.intersectsNode(unwrapIfNeeded(node));
-    }
-  };
-
-  // IE9 does not have createContextualFragment.
-  if (OriginalRange.prototype.createContextualFragment) {
-    Range.prototype.createContextualFragment = function(html) {
-      return wrap(this.impl.createContextualFragment(html));
-    };
-  }
-
-  registerWrapper(window.Range, Range);
-
-  scope.wrappers.Range = Range;
-
-})(window.ShadowDOMPolyfill);
-
-// Copyright 2013 The Polymer Authors. All rights reserved.
-// Use of this source code is goverened by a BSD-style
-// license that can be found in the LICENSE file.
-
-(function(scope) {
-  'use strict';
-
   var isWrapperFor = scope.isWrapperFor;
 
   // This is a list of the elements we currently override the global constructor
@@ -6560,11 +6530,16 @@ var ShadowCSS = {
     return cssText.replace(cssColonHostRe, function(m, p1, p2, p3) {
       p1 = polyfillHostNoCombinator;
       if (p2) {
-        if (p2.match(polyfillHost)) {
-          return p1 + p2.replace(polyfillHost, '') + p3;
-        } else {
-          return p1 + p2 + p3 + ', ' + p2 + ' ' + p1 + p3;
+        var parts = p2.split(','), r = [];
+        for (var i=0, l=parts.length, p; (i<l) && (p=parts[i]); i++) {
+          p = p.trim();
+          if (p.match(polyfillHost)) {
+            r.push(p1 + p.replace(polyfillHost, '') + p3);
+          } else {
+            r.push(p1 + p + p3 + ', ' + p + ' ' + p1 + p3);
+          }
         }
+        return r.join(',');
       } else {
         return p1 + p3;
       }
@@ -6953,6 +6928,17 @@ scope.mixin = mixin;
     })();
   }
 
+  // TODO(sorvell): workaround for bug:
+  // https://code.google.com/p/chromium/issues/detail?id=229142
+  // remove when this bug is addressed
+  // give main document templates a base that allows them to fetch eagerly
+  // resolved paths relative to the main document
+  var template = document.createElement('template');
+  var base = document.createElement('base');
+  base.href = document.baseURI;
+  template.content.ownerDocument.appendChild(base);
+  
+
   // utility
 
   function createDOM(inTagOrNode, inHTML, inAttrs) {
@@ -7178,6 +7164,66 @@ window.templateContent = window.templateContent || function(inTemplate) {
 })(window.Inspector);
 
 
+
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+(function(scope) {
+  /*
+    Shim :unresolved via an attribute unresolved.
+    TODO(sorvell): This is currently done once when the first
+    round of elements are upgraded. This is incorrect, and it will
+    need to be done dynamically.
+    The 'resolved' attribute is experimental and may be removed.
+  */
+  var TRANSITION_TIME = 0.2;
+  var UNRESOLVED = 'unresolved';
+  var RESOLVED = 'resolved';
+  var UNRESOLVED_SELECTOR = '[' + UNRESOLVED + ']';
+  var RESOLVED_SELECTOR = '[' + RESOLVED + ']';
+  var style = document.createElement('style');
+  
+  style.textContent = UNRESOLVED_SELECTOR + ' { ' +
+      'opacity: 0; display: block; overflow: hidden; } \n' +
+      RESOLVED_SELECTOR +  '{ display: block; overflow: hidden;\n' +
+      '-webkit-transition: opacity ' + TRANSITION_TIME + 's; ' +
+      'transition: opacity ' + TRANSITION_TIME +'s; }\n';
+  var head = document.querySelector('head');
+  head.insertBefore(style, head.firstChild);
+
+  // remove unresolved and apply resolved class
+  function resolveElements() {
+    requestAnimationFrame(function() {
+      var nodes = document.querySelectorAll(UNRESOLVED_SELECTOR);
+      for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
+        n.removeAttribute(UNRESOLVED);
+        n.setAttribute(RESOLVED, '');
+      }
+
+      // NOTE: depends on transition end event to remove 'resolved' class.
+      if (nodes.length) {
+        var removeResolved = function() {
+          for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
+            n.removeAttribute(RESOLVED);
+          }
+          document.body.removeEventListener(endEvent, removeResolved, false);
+        }
+        document.body.addEventListener(endEvent, removeResolved, false);
+      };
+
+    });
+  }
+
+  // determine transition end event
+  var endEvent = (document.documentElement.style.webkitTransition !== undefined) ?
+      'webkitTransitionEnd' : 'transitionend';
+
+  // hookup auto-unveiling
+  window.addEventListener('WebComponentsReady', resolveElements);
+
+})(Platform);
 
 // Copyright 2011 Google Inc.
 //
@@ -10513,11 +10559,9 @@ var importer = {
         importer.preload(document);
       }
       // store import record
-      elt.import = {
-        href: url,
-        ownerNode: elt,
-        content: document
-      };
+      elt.import = document;
+      elt.import.href = url;
+      elt.import.ownerNode = elt;
       // store document resource
       elt.content = resource = document;
     }
@@ -10841,6 +10885,16 @@ xhr = xhr || {
 
 var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
 
+// expose _currentScript
+Object.defineProperty(document, '_currentScript', {
+  get: function() {
+    return HTMLImports.currentScript || document.currentScript;
+  },
+  writeable: true,
+  configurable: true
+});
+
+
 // exports
 
 scope.path = path;
@@ -10901,8 +10955,10 @@ var importParser = {
   },
   parseLink: function(linkElt) {
     if (isDocumentLink(linkElt)) {
-      if (linkElt.content) {
-        importParser.parse(linkElt.content);
+      if (linkElt.import) {
+        importParser.parse(linkElt.import);
+        // fire load event
+        linkElt.dispatchEvent(new CustomEvent('load'));
       }
     } else {
       this.parseGeneric(linkElt);
@@ -10934,7 +10990,9 @@ var importParser = {
         // source map hint
         code += "\n//# sourceURL=" + moniker + "\n";
         // evaluate the code
+        scope.currentScript = scriptElt;
         eval.call(window, code);
+        scope.currentScript = null;
       }
     }
   }
@@ -11569,7 +11627,7 @@ if (document.readyState === 'complete' ||
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
  */
-window.CustomElements = {flags:{}};
+window.CustomElements = window.CustomElements || {flags:{}};
  /*
 Copyright 2013 The Polymer Authors. All rights reserved.
 Use of this source code is governed by a BSD-style
@@ -12104,6 +12162,8 @@ if (useNative) {
     if (definition.is) {
       element.setAttribute('is', definition.is);
     }
+    // remove 'unresolved' attr, which is a standin for :unresolved.
+    element.removeAttribute('unresolved');
     // make 'element' implement definition.prototype
     implement(element, definition);
     // flag as upgraded
@@ -12336,7 +12396,7 @@ CustomElements.parser = parser;
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
  */
-(function(){
+(function(scope){
 
 // bootstrap parsing
 function bootstrap() {
@@ -12373,9 +12433,10 @@ if (typeof window.CustomEvent !== 'function') {
   };
 }
 
-// When loading at readyState complete time, boot custom elements immediately.
+// When loading at readyState complete time (or via flag), boot custom elements
+// immediately.
 // If relevant, HTMLImports must already be loaded.
-if (document.readyState === 'complete') {
+if (document.readyState === 'complete' || scope.flags.eager) {
   bootstrap();
 // When loading at readyState interactive time, bootstrap only if HTMLImports
 // are not pending. Also avoid IE as the semantics of this state are unreliable.
@@ -12389,7 +12450,7 @@ if (document.readyState === 'complete') {
   window.addEventListener(loadEvent, bootstrap);
 }
 
-})();
+})(window.CustomElements);
 
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
@@ -12800,9 +12861,10 @@ scope.endOfMicrotask = endOfMicrotask;
       this.keys.length = 0;
       this.values.length = 0;
     },
+    // return value, key, map
     forEach: function(callback, thisArg) {
-      this.keys.forEach(function(id, i) {
-        callback.call(thisArg, id, this.values[i], this);
+      this.values.forEach(function(v, i) {
+        callback.call(thisArg, v, this.keys[i], this);
       }, this);
     },
     pointers: function() {
@@ -13564,7 +13626,7 @@ scope.endOfMicrotask = endOfMicrotask;
       // been processed yet.
       if (pointermap.pointers() >= tl.length) {
         var d = [];
-        pointermap.forEach(function(key, value) {
+        pointermap.forEach(function(value, key) {
           // Never remove pointerId == 1, which is mouse.
           // Touch identifiers are 2 smaller than their pointerId, which is the
           // index in pointermap.
@@ -14073,6 +14135,7 @@ PointerGestureEvent.prototype.preventTap = function() {
     'screenY',
     'pageX',
     'pageY',
+    'tapPrevented'
   ];
 
   var CLONE_DEFAULTS = [
@@ -14749,7 +14812,7 @@ PointerGestureEvent.prototype.preventTap = function() {
  */
 (function(scope) {
   var dispatcher = scope.dispatcher;
-  var pointermap = new scope.PointerMap;
+  var pointermap = new scope.PointerMap();
   var tap = {
     events: [
       'pointerdown',
