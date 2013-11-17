@@ -1,7 +1,6 @@
 module.exports = (function() {
 
 if (window.Platform) return window.Platform; // prevent double-loading
-
 /*
  * Copyright 2012 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
@@ -1443,7 +1442,7 @@ if (typeof WeakMap === 'undefined') {
     'delete': PROP_DELETE_TYPE,
     splice: ARRAY_SPLICE_TYPE
   };
-})(typeof global !== 'undefined' && global ? global : this);
+})(typeof global !== 'undefined' && global ? global : window);
 
 // prepoulate window.Platform.flags for default controls
 window.Platform = window.Platform || {};
@@ -11026,7 +11025,7 @@ function isElementElementChild(elt) {
 
 scope.parser = importParser;
 
-})(HTMLImports);
+})(window.HTMLImports);
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
@@ -12518,7 +12517,7 @@ new (window.MutationObserver || JsMutationObserver)(atEndOfMicrotask)
 
 scope.endOfMicrotask = endOfMicrotask;
 
-})(Platform);
+})(window.Platform);
 
 
 /*
@@ -14884,6 +14883,4 @@ PointerGestureEvent.prototype.preventTap = function() {
 
 return window.Platform;
 
-
 })()
-
