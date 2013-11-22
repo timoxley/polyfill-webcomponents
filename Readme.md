@@ -22,6 +22,9 @@ var Platform = require('polyfill-webcomponents')
 // Platform is polymer's proprietary namespace, contains some helpers
 ```
 
+Simply require polyfill-webcomponents anywhere your code needs webcomponent support.
+You can safely require polyfill-webcomponents multiple times, it will only add the polyfills once.
+
 ## Features
 
 Due to nature of the browser, proper encapsulation of these polyfills is not possible.
