@@ -32,7 +32,6 @@ Due to nature of the browser, proper encapsulation of these polyfills is not pos
 * HTMLTemplates
 * Model Driven Views
 * WeakMap
-* Object.observe
 * PointerEvents
 * PointerGestures
 * HTMLImports
