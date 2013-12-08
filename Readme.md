@@ -42,7 +42,7 @@ You can safely require polyfill-webcomponents multiple times, it will only add t
 
 ## Documentation
 
-[See the documentation for the Platform on the Polymer website.](http://www.polymer-project.org/)
+See the documentation specifically for the **Platform** on the [Polymer website.](http://www.polymer-project.org/)
 
 ## Features
 
@@ -83,6 +83,10 @@ These polyfills work ([with caveats](http://www.polymer-project.org/compatibilit
 Do the web a favour, insist on only supporting Evergreen Browsers in your upcoming project.
 
 [See Polymer's documentation for more information](http://www.polymer-project.org/compatibility.html).
+
+## Why not the full platform?
+
+**Warning: opinions.** Polymer is a framework like Angular or Ember. Where it differs though, is that rather than any innovation only benefiting those using the framework, Polymer's innovations can be shared be the web community as a whole, by building atop and driving the development of next generation web platform features in the form of polyfills. Polymer is allowing the world to prototype and provide feedback on next-gen web technology. So rather than abstracting this new technology away with "yet another framework", I figure learning about and utilizing features which will actually be implemented in browsers one day is a more constructive endevour.
 
 ## TODO
 
