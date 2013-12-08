@@ -2,7 +2,7 @@
 
 ### Browserify compatible Web Components Polyfills
 
-This is the [Polymer Platform]((https://github.com/Polymer/polymer)) in a browserify compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills.
+This is the [Polymer Platform]((https://github.com/Polymer/polymer) in a browserify compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills for next-generation web technology.
 
 Polyfills will be regularly updated to latest development versions.
 
