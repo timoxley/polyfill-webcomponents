@@ -2,14 +2,28 @@
 
 ### Browserify compatible Web Components Polyfills
 
-The 'polymer platform' in a browserify compatible package. Polyfills courtesy of [Polymer](https://github.com/Polymer/polymer)
+This is the [Polymer Platform]((https://github.com/Polymer/polymer)) in a browserify compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills.
 
-Polyfills will be updated to latest development versions weekly.
+Polyfills will be regularly updated to latest development versions.
 
 ## Installation
 
 ```
 > npm install --save polyfill-webcomponents
+```
+
+### Use as a peer dependency
+
+It is recommended to set `polyfill-webcomponents` as a [Peer Dependency](http://domenic.me/2013/02/08/peer-dependencies/) for anything except your top-level application.
+
+Because `polyfill-webcomponents` necessarily modifies your global state, and will only load once, it doesn't make sense to have multiple copies bundled in your app. Peer dependencies allows a child modules to use the version loaded in the parent module.
+
+Add this to your `package.json`:
+
+```json
+  "peerDependencies": {
+    "polyfill-webcomponents": "*"
+  },
 ```
 
 ## Usage
@@ -23,7 +37,12 @@ var Platform = require('polyfill-webcomponents')
 ```
 
 Simply require polyfill-webcomponents anywhere your code needs webcomponent support.
+
 You can safely require polyfill-webcomponents multiple times, it will only add the polyfills once.
+
+## Documentation
+
+[See the documentation for the Platform on the Polymer website.](http://www.polymer-project.org/)
 
 ## Features
 
@@ -42,6 +61,14 @@ Due to nature of the browser, proper encapsulation of these polyfills is not pos
 Go to [polymer-project.org](http://www.polymer-project.org/) for API details.
 
 ## Browser Compatibility
+
+This is alpha software. Support/performance is a bit fickle in everything but Chrome & Canary, and you may even experience dramatic differences between versions of Chrome. For best experience you'll want to at least enable:
+
+* chrome://flags/#enable-experimental-web-platform-features
+* chrome://flags/#enable-html-imports
+* chrome://flags/#enable-javascript-harmony
+
+But remember to also test for degraded performance with these features off.
 
 These polyfills work ([with caveats](http://www.polymer-project.org/compatibility.html)) in [Evergreen Browsers](http://tomdale.net/2013/05/evergreen-browsers/).
 
