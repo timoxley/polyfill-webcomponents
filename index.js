@@ -318,8 +318,8 @@ if (typeof WeakMap === 'undefined') {
 
   function dirtyCheck(observer) {
     var cycles = 0;
-    while (cycles < MAX_DIRTY_CHECK_CYCLES && observer.check()) {
-      observer.report();
+    while (cycles < MAX_DIRTY_CHECK_CYCLES && observer.check_()) {
+      observer.report_();
       cycles++;
     }
     if (global.testingExposeCycleCount)
@@ -386,17 +386,27 @@ if (typeof WeakMap === 'undefined') {
     return copy;
   }
 
-  function Observer(object, callback, target) {
-    this.closed = false;
-    this.object = object;
-    this.callback = callback;
-    // TODO(rafaelw): Hold this.target weakly when WeakRef is available.
-    this.target = target;
-    this.reporting = true;
+  function isObservable(obj) {
+    return obj &&
+           typeof obj.open == 'function' &&
+           typeof obj.close == 'function';
+  }
+
+  var UNOPENED = 0;
+  var OPENED = 1;
+  var CLOSED = 2;
+  function Observer() {
+    this.state_ = UNOPENED;
+
+    this.value_ = undefined;
+    this.callback_ = undefined;
+    this.target_ = undefined; // TODO(rafaelw): Should be WeakRef
+    this.reporting_ = true;
+    this.reportArgs_ = undefined;
     if (hasObserve) {
       var self = this;
-      this.boundInternalCallback = function(records) {
-        self.internalCallback(records);
+      this.boundInternalCallback_ = function(records) {
+        self.internalCallback_(records);
       };
     }
 
@@ -404,70 +414,92 @@ if (typeof WeakMap === 'undefined') {
   }
 
   Observer.prototype = {
-    internalCallback: function(records) {
-      if (this.closed)
+    open: function(callback, target) {
+      if (this.state_ != UNOPENED)
+        throw Error('Observer has already been opened.');
+
+      this.callback_ = callback;
+      this.target_ = target;
+      this.state_ = OPENED;
+      this.connect_();
+      this.sync_(true);
+      return this.value_;
+    },
+
+    getValue: function() {
+      return this.value_;
+    },
+
+    internalCallback_: function(records) {
+      if (this.state_ != OPENED)
         return;
-      if (this.reporting && this.check(records)) {
-        this.report();
+      if (this.reporting_ && this.check_(records)) {
+        this.report_();
         if (this.testingResults)
           this.testingResults.anyChanged = true;
       }
     },
 
     close: function() {
-      if (this.closed)
+      if (this.state_ == CLOSED)
         return;
-      if (this.object && typeof this.object.close === 'function')
-        this.object.close();
 
-      this.disconnect();
-      this.object = undefined;
-      this.closed = true;
+      this.state_ = CLOSED;
+      this.disconnect_();
+      this.value_ = undefined;
+      this.callback_ = undefined;
+      this.target_ = undefined;
     },
 
     deliver: function(testingResults) {
-      if (this.closed)
+      if (this.state_ != OPENED)
         return;
+
       if (hasObserve) {
+        if (this.deliverDeps_)
+          this.deliverDeps_();
+
         this.testingResults = testingResults;
-        Object.deliverChangeRecords(this.boundInternalCallback);
+        Object.deliverChangeRecords(this.boundInternalCallback_);
         this.testingResults = undefined;
       } else {
         dirtyCheck(this);
       }
     },
 
-    report: function() {
-      if (!this.reporting)
+    report_: function() {
+      if (!this.reporting_)
         return;
 
-      this.sync(false);
-      if (this.callback) {
-        this.invokeCallback(this.reportArgs);
+      this.sync_(false);
+      if (this.callback_) {
+        this.invokeCallback_(this.reportArgs_);
       }
-      this.reportArgs = undefined;
+      this.reportArgs_ = undefined;
     },
 
-    invokeCallback: function(args) {
+    invokeCallback_: function(args) {
       try {
-        this.callback.apply(this.target, args);
+        this.callback_.apply(this.target_, args);
       } catch (ex) {
         Observer._errorThrownDuringCallback = true;
-        console.error('Exception caught during observer callback: ' + (ex.stack || ex));
+        console.error('Exception caught during observer callback: ' +
+                       (ex.stack || ex));
       }
     },
 
-    reset: function() {
-      if (this.closed)
-        return;
+    discardChanges: function() {
+      if (this.state_ != OPENED)
+        throw Error('Observer is not open');
 
       if (hasObserve) {
-        this.reporting = false;
-        Object.deliverChangeRecords(this.boundInternalCallback);
-        this.reporting = true;
+        this.reporting_ = false;
+        Object.deliverChangeRecords(this.boundInternalCallback_);
+        this.reporting_ = true;
       }
 
-      this.sync(true);
+      this.sync_(true);
+      return this.value_;
     }
   }
 
@@ -518,14 +550,14 @@ if (typeof WeakMap === 'undefined') {
 
       for (var i = 0; i < toCheck.length; i++) {
         var observer = toCheck[i];
-        if (observer.closed)
+        if (observer.state_ != OPENED)
           continue;
 
         if (hasObserve) {
           observer.deliver(results);
-        } else if (observer.check()) {
+        } else if (observer.check_()) {
           results.anyChanged = true;
-          observer.report();
+          observer.report_();
         }
 
         allObservers.push(observer);
@@ -545,26 +577,26 @@ if (typeof WeakMap === 'undefined') {
     };
   }
 
-  function ObjectObserver(object, callback, target) {
-    Observer.call(this, object, callback, target);
-    this.connect();
-    this.sync(true);
+  function ObjectObserver(object) {
+    Observer.call(this);
+    this.value_ = object;
+    this.oldObject_ = undefined;
   }
 
   ObjectObserver.prototype = createObject({
     __proto__: Observer.prototype,
 
-    connect: function() {
+    connect_: function() {
       if (hasObserve)
-        Object.observe(this.object, this.boundInternalCallback);
+        Object.observe(this.value_, this.boundInternalCallback_);
     },
 
-    sync: function(hard) {
+    sync_: function(hard) {
       if (!hasObserve)
-        this.oldObject = copyObject(this.object);
+        this.oldObject_ = copyObject(this.value_);
     },
 
-    check: function(changeRecords) {
+    check_: function(changeRecords) {
       var diff;
       var oldValues;
       if (hasObserve) {
@@ -572,67 +604,67 @@ if (typeof WeakMap === 'undefined') {
           return false;
 
         oldValues = {};
-        diff = diffObjectFromChangeRecords(this.object, changeRecords,
+        diff = diffObjectFromChangeRecords(this.value_, changeRecords,
                                            oldValues);
       } else {
-        oldValues = this.oldObject;
-        diff = diffObjectFromOldObject(this.object, this.oldObject);
+        oldValues = this.oldObject_;
+        diff = diffObjectFromOldObject(this.value_, this.oldObject_);
       }
 
       if (diffIsEmpty(diff))
         return false;
 
-      this.reportArgs =
+      this.reportArgs_ =
           [diff.added || {}, diff.removed || {}, diff.changed || {}];
-      this.reportArgs.push(function(property) {
+      this.reportArgs_.push(function(property) {
         return oldValues[property];
       });
 
       return true;
     },
 
-    disconnect: function() {
+    disconnect_: function() {
       if (!hasObserve)
-        this.oldObject = undefined;
-      else if (this.object)
-        Object.unobserve(this.object, this.boundInternalCallback);
+        this.oldObject_ = undefined;
+      else if (this.value_)
+        Object.unobserve(this.value_, this.boundInternalCallback_);
     }
   });
 
-  function ArrayObserver(array, callback, target) {
+  function ArrayObserver(array) {
     if (!Array.isArray(array))
       throw Error('Provided object is not an Array');
-    ObjectObserver.call(this, array, callback, target);
+    ObjectObserver.call(this, array);
   }
 
   ArrayObserver.prototype = createObject({
     __proto__: ObjectObserver.prototype,
 
-    connect: function() {
+    connect_: function() {
       if (hasObserve)
-        Array.observe(this.object, this.boundInternalCallback);
+        Array.observe(this.value_, this.boundInternalCallback_);
     },
 
-    sync: function() {
+    sync_: function() {
       if (!hasObserve)
-        this.oldObject = this.object.slice();
+        this.oldObject_ = this.value_.slice();
     },
 
-    check: function(changeRecords) {
+    check_: function(changeRecords) {
       var splices;
       if (hasObserve) {
         if (!changeRecords)
           return false;
-        splices = projectArraySplices(this.object, changeRecords);
+        splices = projectArraySplices(this.value_, changeRecords);
       } else {
-        splices = calcSplices(this.object, 0, this.object.length,
-                              this.oldObject, 0, this.oldObject.length);
+        splices = calcSplices(this.value_, 0, this.value_.length,
+                              this.oldObject_, 0, this.oldObject_.length);
       }
 
       if (!splices || !splices.length)
         return false;
 
-      this.reportArgs = [splices];
+      this.reportArgs_ = [splices];
       return true;
     }
   });
@@ -652,7 +684,7 @@ if (typeof WeakMap === 'undefined') {
 
   function ObservedSet(callback) {
     this.arr = [];
-    this.callback = callback;
+    this.callback_ = callback;
     this.isObserved = true;
   }
 
@@ -675,7 +707,7 @@ if (typeof WeakMap === 'undefined') {
       if (i < 0) {
         i = this.arr.length;
         this.arr[i] = obj;
-        Object.observe(obj, this.callback);
+        Object.observe(obj, this.callback_);
       }
 
       this.arr[i+1] = this.isObserved;
@@ -694,7 +726,7 @@ if (typeof WeakMap === 'undefined') {
           }
           i += 2;
         } else {
-          Object.unobserve(obj, this.callback);
+          Object.unobserve(obj, this.callback_);
         }
         j += 2;
       }
@@ -703,204 +735,273 @@ if (typeof WeakMap === 'undefined') {
     }
   };
 
-  function PathObserver(object, path, callback, target, transformFn,
-                        setValueFn) {
-    var path = path instanceof Path ? path : getPath(path);
-    if (!path || !path.length || !isObject(object)) {
-      this.value_ = path ? path.getValueFrom(object) : undefined;
-      this.value = transformFn ? transformFn(this.value_) : this.value_;
-      this.closed = true;
-      return;
-    }
-
-    Observer.call(this, object, callback, target);
-    this.transformFn = transformFn;
-    this.setValueFn = setValueFn;
-    this.path = path;
-
-    this.connect();
-    this.sync(true);
+  function PathObserver(object, path) {
+    Observer.call(this);
+    this.object_ = object;
+    this.path_ = path instanceof Path ? path : getPath(path);
+    this.observedSet_ = undefined;
   }
 
   PathObserver.prototype = createObject({
     __proto__: Observer.prototype,
 
-    connect: function() {
-      if (hasObserve)
-        this.observedSet = new ObservedSet(this.boundInternalCallback);
+    getValue: function() {
+      return this.path_.getValueFrom(this.object_);
     },
 
-    disconnect: function() {
+    connect_: function() {
+      if (hasObserve)
+        this.observedSet_ = new ObservedSet(this.boundInternalCallback_);
+    },
+
+    disconnect_: function() {
       this.value = undefined;
       this.value_ = undefined;
-      if (this.observedSet) {
-        this.observedSet.reset();
-        this.observedSet.cleanup();
-        this.observedSet = undefined;
+      if (this.observedSet_) {
+        this.observedSet_.reset();
+        this.observedSet_.cleanup();
+        this.observedSet_ = undefined;
       }
     },
 
-    check: function() {
+    check_: function() {
       // Note: Extracting this to a member function for use here and below
       // regresses dirty-checking path perf by about 25% =-(.
-      if (this.observedSet)
-        this.observedSet.reset();
+      if (this.observedSet_)
+        this.observedSet_.reset();
 
-      this.value_ = this.path.getValueFrom(this.object, this.observedSet);
+      var newValue = this.path_.getValueFrom(this.object_, this.observedSet_);
 
-      if (this.observedSet)
-        this.observedSet.cleanup();
+      if (this.observedSet_)
+        this.observedSet_.cleanup();
 
-      if (areSameValue(this.value_, this.oldValue_))
+      if (areSameValue(this.value_, newValue))
         return false;
 
-      this.value = this.transformFn ? this.transformFn(this.value_)
-                                    : this.value_;
-      this.reportArgs = [this.value, this.oldValue];
+      this.reportArgs_ = [newValue, this.value_];
+      this.value_ = newValue;
       return true;
     },
 
-    sync: function(hard) {
+    sync_: function(hard) {
       if (hard) {
-        if (this.observedSet)
-          this.observedSet.reset();
+        if (this.observedSet_)
+          this.observedSet_.reset();
 
-        this.value_ = this.path.getValueFrom(this.object, this.observedSet);
-        this.value = this.transformFn ? this.transformFn(this.value_)
-                                      : this.value_;
+        this.value_ = this.path_.getValueFrom(this.object_, this.observedSet_);
 
-        if (this.observedSet)
-          this.observedSet.cleanup();
+        if (this.observedSet_)
+          this.observedSet_.cleanup();
       }
-
-      this.oldValue_ = this.value_;
-      this.oldValue = this.value;
     },
 
     setValue: function(newValue) {
-      if (this.setValueFn)
-        this.setValueFn(newValue);
-      else if (this.path)
-        this.path.setValueFrom(this.object, newValue);
+      if (this.path_)
+        this.path_.setValueFrom(this.object_, newValue);
     }
   });
 
-  function CompoundPathObserver(callback, target, transformFn, setValueFn) {
-    Observer.call(this, undefined, callback, target);
-    this.transformFn = transformFn;
-    this.setValueFn = setValueFn;
+  function CompoundObserver() {
+    Observer.call(this);
 
-    this.observed = [];
-    this.values = [];
-    this.value = undefined;
-    this.oldValue = undefined;
-    this.oldValues = undefined;
-    this.changeFlags = undefined;
-    this.started = false;
+    this.observed_ = [];
+    this.value_ = [];
+    this.hasObservers_ = false;
+    this.depsChanged_ = undefined;
   }
 
-  CompoundPathObserver.prototype = createObject({
+  var observerSentinel = {};
+
+  CompoundObserver.prototype = createObject({
     __proto__: PathObserver.prototype,
+
+    getValue: function() {
+      var values = [];
+      this.getValues_(values, true);
+      return values;
+    },
+
+    setValue: function() {
+      console.warn('Set to CompoundObserver ignored.');
+    },
 
     // TODO(rafaelw): Consider special-casing when |object| is a PathObserver
     // and path 'value' to avoid explicit observation.
     addPath: function(object, path) {
-      if (this.started)
-        throw Error('Cannot add more paths once started.');
+      if (this.state_ != UNOPENED)
+        throw Error('Cannot add paths once started.');
 
-      var path = path instanceof Path ? path : getPath(path);
-      var value = path ? path.getValueFrom(object) : undefined;
-
-      this.observed.push(object, path);
-      this.values.push(value);
+      this.observed_.push(object, path instanceof Path ? path : getPath(path));
     },
 
-    start: function() {
-      this.started = true;
-      this.connect();
-      this.sync(true);
+    addObserver: function(observer) {
+      if (this.state_ != UNOPENED)
+        throw Error('Cannot add observers once started.');
+
+      if (!isObservable(observer))
+        throw Error('Object must be observable');
+
+      this.hasObservers_ = true;
+
+      observer.open(this.observerChanged_, this);
+      var value = observer.value;
+
+      this.observed_.push(observerSentinel, observer);
+      this.value_.push(value);
     },
 
-    getValues: function() {
-      if (this.observedSet)
-        this.observedSet.reset();
-
-      var anyChanged = false;
-      for (var i = 0; i < this.observed.length; i = i+2) {
-        var path = this.observed[i+1];
-        if (!path)
-          continue;
-        var object = this.observed[i];
-        var value = path.getValueFrom(object, this.observedSet);
-        var oldValue = this.values[i/2];
-        if (!areSameValue(value, oldValue)) {
-          if (!anyChanged && !this.transformFn) {
-            this.oldValues = this.oldValues || [];
-            this.changeFlags = this.changeFlags || [];
-            for (var j = 0; j < this.values.length; j++) {
-              this.oldValues[j] = this.values[j];
-              this.changeFlags[j] = false;
-            }
-          }
-
-          if (!this.transformFn)
-            this.changeFlags[i/2] = true;
-
-          this.values[i/2] = value;
-          anyChanged = true;
-        }
-      }
-
-      if (this.observedSet)
-        this.observedSet.cleanup();
-
-      return anyChanged;
-    },
-
-    check: function() {
-      if (!this.getValues())
+    deliverDeps_: function() {
+      if (!this.hasObservers_)
         return;
 
-      if (this.transformFn) {
-        this.value = this.transformFn(this.values);
+      for (var i = 0; i < this.observed_.length; i += 2) {
+        if (this.observed_[i] === observerSentinel)
+          this.observed_[i + 1].deliver();
+      }
+    },
 
-        if (areSameValue(this.value, this.oldValue))
-          return false;
+    observerChanged_: function() {
+      if (!hasObserve)
+        return this.deliver();
 
-        this.reportArgs = [this.value, this.oldValue];
-      } else {
-        this.reportArgs = [this.values, this.oldValues, this.changeFlags,
-                           this.observed];
+      if (!this.depsChanged_) {
+        this.depsChanged_ = {};
+        Object.observe(this.depsChanged_, this.boundInternalCallback_);
       }
 
+      this.depsChanged_.changed = !this.depsChanged_.changed;
+    },
+
+    getValues_: function(values, sync) {
+      if (this.observedSet_)
+        this.observedSet_.reset();
+
+      var oldValues;
+      for (var i = 0; i < this.observed_.length; i += 2) {
+        var pathOrObserver = this.observed_[i+1];
+        var object = this.observed_[i];
+        var value = object === observerSentinel ?
+            pathOrObserver.discardChanges() :
+            pathOrObserver.getValueFrom(object, this.observedSet_)
+
+        if (sync) {
+          values[i / 2] = value;
+          continue;
+        }
+
+        if (areSameValue(value, values[i / 2]))
+          continue;
+
+        oldValues = oldValues || [];
+        oldValues[i / 2] = values[i / 2];
+        values[i / 2] = value;
+      }
+
+      if (this.observedSet_)
+        this.observedSet_.cleanup();
+
+      return oldValues;
+    },
+
+    check_: function() {
+      var oldValues = this.getValues_(this.value_);
+      if (!oldValues)
+        return;
+
+      // TODO(rafaelw): Having observed_ as the third callback arg here is
+      // pretty lame API. Fix.
+      this.reportArgs_ = [this.value_, oldValues, this.observed_];
       return true;
     },
 
-    sync: function(hard) {
-      if (hard) {
-        this.getValues();
-        if (this.transformFn)
-          this.value = this.transformFn(this.values);
-      }
-
-      if (this.transformFn)
-        this.oldValue = this.value;
+    sync_: function(hard) {
+      if (hard)
+        this.getValues_(this.value_, true);
     },
 
     close: function() {
-      if (this.observed) {
-        for (var i = 0; i < this.observed.length; i = i + 2) {
-          var object = this.observed[i];
-          if (object && typeof object.close === 'function')
-            object.close();
+      if (this.hasObservers_) {
+        for (var i = 0; i < this.observed_.length; i += 2) {
+          if (this.observed_[i] === observerSentinel)
+            this.observed_[i + 1].close();
         }
-        this.observed = undefined;
-        this.values = undefined;
+
+        this.observed_ = undefined;
+        this.value_ = undefined;
+      }
+
+      if (this.depsChanged_) {
+        Object.unobserve(this.depsChanged_, this.boundInternalCallback_);
+        this.depsChanged_ = undefined;
       }
 
       Observer.prototype.close.call(this);
     }
   });
+
+  function identFn(value) { return value; }
+
+  function ObserverTransform(observable, getValueFn, setValueFn,
+                             dontPassThroughSet) {
+    this.callback_ = undefined;
+    this.target_ = undefined;
+    this.value_ = undefined;
+    this.observable_ = observable;
+    this.getValueFn_ = getValueFn || identFn;
+    this.setValueFn_ = setValueFn || identFn;
+    // TODO(rafaelw): This is a temporary hack. PolymerExpressions needs this
+    // at the moment because of a bug in it's dependency tracking.
+    this.dontPassThroughSet_ = dontPassThroughSet;
+  }
+
+  ObserverTransform.prototype = {
+    open: function(callback, target) {
+      this.callback_ = callback;
+      this.target_ = target;
+      this.value_ =
+          this.getValueFn_(this.observable_.open(this.observedCallback_, this));
+      return this.value_;
+    },
+
+    observedCallback_: function(value) {
+      value = this.getValueFn_(value);
+      if (areSameValue(value, this.value_))
+        return;
+      var oldValue = this.value_;
+      this.value_ = value;
+      this.callback_.call(this.target_, this.value_, oldValue);
+    },
+
+    getValue: function() {
+      return this.getValueFn_(this.observable_.getValue());
+    },
+
+    discardChanges: function() {
+      this.value_ = this.getValueFn_(this.observable_.discardChanges());
+      return this.value_;
+    },
+
+    deliver: function() {
+      return this.observable_.deliver();
+    },
+
+    setValue: function(value) {
+      value = this.setValueFn_(value);
+      if (!this.dontPassThroughSet_ && this.observable_.setValue)
+        return this.observable_.setValue(value);
+    },
+
+    close: function() {
+      if (this.observable_)
+        this.observable_.close();
+      this.callback_ = undefined;
+      this.target_ = undefined;
+      this.observable_ = undefined;
+      this.value_ = undefined;
+      this.getValueFn_ = undefined;
+      this.setValueFn_ = undefined;
+    }
+  }
 
   var expectedRecordTypes = {};
   expectedRecordTypes[PROP_ADD_TYPE] = true;
@@ -924,40 +1025,30 @@ if (typeof WeakMap === 'undefined') {
     }
   }
 
-  // TODO(rafaelw): It should be possible for the Object.observe case to have
-  // every PathObserver used by defineProperty share a single Object.observe
-  // callback, and thus get() can simply call observer.deliver() and any changes
-  // to any dependent value will be observed.
-  PathObserver.defineProperty = function(target, name, object, path) {
-    // TODO(rafaelw): Validate errors
-    path = getPath(path);
+  Observer.defineProperty = function(target, name, observable) {
     var notify = notifyFunction(target, name);
-
-    var observer = new PathObserver(object, path,
-        function(newValue, oldValue) {
-          if (notify)
-            notify(PROP_UPDATE_TYPE, oldValue);
-        }
-    );
+    observable.open(function(newValue, oldValue) {
+      if (notify)
+        notify(PROP_UPDATE_TYPE, oldValue);
+    });
 
     Object.defineProperty(target, name, {
       get: function() {
-        return path.getValueFrom(object);
+        return observable.getValue();
       },
       set: function(newValue) {
-        path.setValueFrom(object, newValue);
+        observable.setValue(newValue);
+        return newValue;
       },
       configurable: true
     });
 
     return {
       close: function() {
-        var oldValue = path.getValueFrom(object);
-        if (notify)
-          observer.deliver();
-        observer.close();
+        var lastValue = observable.getValue();
+        observable.close();
         Object.defineProperty(target, name, {
-          value: oldValue,
+          value: lastValue,
           writable: true,
           configurable: true
         });
@@ -1422,6 +1513,7 @@ if (typeof WeakMap === 'undefined') {
 
   global.Observer = Observer;
   global.Observer.hasObjectObserve = hasObserve;
+  global.Observer.isObservable = isObservable;
   global.ArrayObserver = ArrayObserver;
   global.ArrayObserver.calculateSplices = function(current, previous) {
     return arraySplice.calculateSplices(current, previous);
@@ -1430,8 +1522,9 @@ if (typeof WeakMap === 'undefined') {
   global.ArraySplice = ArraySplice;
   global.ObjectObserver = ObjectObserver;
   global.PathObserver = PathObserver;
-  global.CompoundPathObserver = CompoundPathObserver;
+  global.CompoundObserver = CompoundObserver;
   global.Path = Path;
+  global.ObserverTransform = ObserverTransform;
 
   // TODO(rafaelw): Only needed for testing until new change record names
   // make it to release.
@@ -2726,14 +2819,16 @@ window.ShadowDOMPolyfill = {};
     if (prototype)
       mixin(GenericEvent.prototype, prototype);
     if (OriginalEvent) {
-      // IE does not support event constructors but FocusEvent can only be
-      // created using new FocusEvent in Firefox.
-      // https://bugzilla.mozilla.org/show_bug.cgi?id=882165
-      if (OriginalEvent.prototype['init' + name]) {
+      // - Old versions of Safari fails on new FocusEvent (and others?).
+      // - IE does not support event constructors.
+      // - createEvent('FocusEvent') throws in Firefox.
+      // => Try the best practice solution first and fallback to the old way
+      // if needed.
+      try {
+        registerWrapper(OriginalEvent, GenericEvent, new OriginalEvent('temp'));
+      } catch (ex) {
         registerWrapper(OriginalEvent, GenericEvent,
                         document.createEvent(name));
-      } else {
-        registerWrapper(OriginalEvent, GenericEvent, new OriginalEvent('temp'));
       }
     }
     return GenericEvent;
@@ -3392,6 +3487,7 @@ window.ShadowDOMPolyfill = {};
         }
       } else {
         refWrapper = null;
+        refNode = null;
       }
 
       refWrapper && assert(refWrapper.parentNode === this);
@@ -3998,9 +4094,11 @@ window.ShadowDOMPolyfill = {};
     }
   });
 
-  Element.prototype[matchesName] = function(selector) {
-    return this.matches(selector);
-  };
+  if (matchesName != "matches") {
+    Element.prototype[matchesName] = function(selector) {
+      return this.matches(selector);
+    };
+  }
 
   if (OriginalElement.prototype.webkitCreateShadowRoot) {
     Element.prototype.webkitCreateShadowRoot =
@@ -5696,6 +5794,7 @@ window.ShadowDOMPolyfill = {};
   var registerWrapper = scope.registerWrapper;
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
+  var rewrap = scope.rewrap;
   var wrapEventTargetMethods = scope.wrapEventTargetMethods;
   var wrapNodeList = scope.wrapNodeList;
 
@@ -5837,6 +5936,11 @@ window.ShadowDOMPolyfill = {};
         if (!f)
           return;
         newPrototype[name] = function() {
+          // if this element has been wrapped prior to registration,
+          // the wrapper is stale; in this case rewrap
+          if (!(wrap(this) instanceof CustomElementConstructor)) {
+            rewrap(this);
+          }
           f.apply(wrap(this), arguments);
         };
       });
@@ -5844,9 +5948,8 @@ window.ShadowDOMPolyfill = {};
       var p = {prototype: newPrototype};
       if (object.extends)
         p.extends = object.extends;
-      var nativeConstructor = originalRegister.call(unwrap(this), tagName, p);
 
-      function GeneratedWrapper(node) {
+      function CustomElementConstructor(node) {
         if (!node) {
           if (object.extends) {
             return document.createElement(object.extends, tagName);
@@ -5856,13 +5959,15 @@ window.ShadowDOMPolyfill = {};
         }
         this.impl = node;
       }
-      GeneratedWrapper.prototype = prototype;
-      GeneratedWrapper.prototype.constructor = GeneratedWrapper;
+      CustomElementConstructor.prototype = prototype;
+      CustomElementConstructor.prototype.constructor = CustomElementConstructor;
 
-      scope.constructorTable.set(newPrototype, GeneratedWrapper);
+      scope.constructorTable.set(newPrototype, CustomElementConstructor);
       scope.nativePrototypeTable.set(prototype, newPrototype);
 
-      return GeneratedWrapper;
+      // registration is synchronous so do it last
+      var nativeConstructor = originalRegister.call(unwrap(this), tagName, p);
+      return CustomElementConstructor;
     };
 
     forwardMethodsToWrapper([
@@ -6051,7 +6156,12 @@ window.ShadowDOMPolyfill = {};
   // for.
   var elements = {
     'a': 'HTMLAnchorElement',
-    'applet': 'HTMLAppletElement',
+
+    // Do not create an applet element by default since it shows a warning in
+    // IE.
+    // https://github.com/Polymer/polymer/issues/217
+    // 'applet': 'HTMLAppletElement',
+
     'area': 'HTMLAreaElement',
     'br': 'HTMLBRElement',
     'base': 'HTMLBaseElement',
@@ -7527,6 +7637,9 @@ Loader.prototype = {
   },
   require: function(elt) {
     var url = path.nodeUrl(elt);
+    // ensure we have a standard url that can be used
+    // reliably for deduping.
+    url = path.makeAbsUrl(url);
     // TODO(sjmiles): ad-hoc
     elt.__nodeUrl = url;
     // deduplication
@@ -7684,6 +7797,10 @@ var path = {
     }
     var r = t.join('/');
     return r;
+  },
+  makeAbsUrl: function(url) {
+    path.urlElt.href = url;
+    return path.urlElt.href;
   },
   resolvePathsInHTML: function(root, url) {
     url = url || path.documentUrlFromNode(root)
@@ -8957,7 +9074,7 @@ if (useNative) {
       throw new Error('Options missing required prototype property');
     }
     // record name
-    definition.name = name.toLowerCase();
+    definition.__name = name.toLowerCase();
     // ensure a lifecycle object so we don't have to null test it
     definition.lifecycle = definition.lifecycle || {};
     // build a list of ancestral custom elements (for native base detection)
@@ -8973,7 +9090,7 @@ if (useNative) {
     // overrides to implement attributeChanged callback
     overrideAttributeApi(definition.prototype);
     // 7.1.5: Register the DEFINITION with DOCUMENT
-    registerDefinition(definition.name, definition);
+    registerDefinition(definition.__name, definition);
     // 7.1.7. Run custom element constructor generation algorithm with PROTOTYPE
     // 7.1.8. Return the output of the previous step.
     definition.ctor = generateConstructor(definition);
@@ -9006,10 +9123,10 @@ if (useNative) {
       baseTag = a.is && a.tag;
     }
     // our tag is our baseTag, if it exists, and otherwise just our name
-    definition.tag = baseTag || definition.name;
+    definition.tag = baseTag || definition.__name;
     if (baseTag) {
       // if there is a base tag, use secondary 'is' specifier
-      definition.is = definition.name;
+      definition.is = definition.__name;
     }
   }
 
@@ -9319,7 +9436,7 @@ function bootstrap() {
       CustomElements.elapsed = CustomElements.readyTime - HTMLImports.readyTime;
     }
     // notify the system that we are bootstrapped
-    document.body.dispatchEvent(
+    document.dispatchEvent(
       new CustomEvent('WebComponentsReady', {bubbles: true})
     );
   });
@@ -11842,19 +11959,27 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   }
 
-  Node.prototype.bind = function(name, model, path) {
-    console.error('Unhandled binding to Node: ', this, name, model, path);
+  Node.prototype.bind = function(name, observable) {
+    console.error('Unhandled binding to Node: ', this, name, observable);
   };
 
-  Node.prototype.unbind = function(name) {
-    if (!this.bindings)
-      this.bindings = {};
-    var binding = this.bindings[name];
+  function unbind(node, name) {
+    var bindings = node.bindings;
+    if (!bindings) {
+      node.bindings = {};
+      return;
+    }
+
+    var binding = bindings[name];
     if (!binding)
       return;
-    if (typeof binding.close === 'function')
-      binding.close();
-    this.bindings[name] = undefined;
+
+    binding.close();
+    bindings[name] = undefined;
+  }
+
+  Node.prototype.unbind = function(name) {
+    unbind(this, name);
   };
 
   Node.prototype.unbindAll = function() {
@@ -11870,97 +11995,60 @@ PointerGestureEvent.prototype.preventTap = function() {
     this.bindings = {};
   };
 
-  var valuePath = Path.get('value');
-
-  function NodeBinding(node, property, model, path) {
-    this.closed = false;
-    this.node = node;
-    this.property = property;
-    this.model = model;
-    this.path = Path.get(path);
-    if ((this.model instanceof PathObserver ||
-         this.model instanceof CompoundPathObserver) &&
-         this.path === valuePath) {
-      this.observer = this.model;
-      this.observer.target = this;
-      this.observer.callback = this.valueChanged;
-    } else {
-      this.observer = new PathObserver(this.model, this.path,
-                                       this.valueChanged,
-                                       this);
-    }
-    this.valueChanged(this.value);
+  function sanitizeValue(value) {
+    return value === undefined || value === null ? '' : value;
   }
 
-  NodeBinding.prototype = {
-    valueChanged: function(value) {
-      this.node[this.property] = this.sanitizeBoundValue(value);
-    },
+  function updateText(node, value) {
+    node.data = sanitizeValue(value);
+  }
 
-    sanitizeBoundValue: function(value) {
-      return value == undefined ? '' : String(value);
-    },
+  function textBinding(node) {
+    return function(value) {
+      return updateText(node, value);
+    };
+  }
 
-    close: function() {
-      if (this.closed)
-        return;
-      this.observer.close();
-      this.observer = undefined;
-      this.node = undefined;
-      this.model = undefined;
-      this.closed = true;
-    },
-
-    get value() {
-      return this.observer.value;
-    },
-
-    set value(value) {
-      this.observer.setValue(value);
-    },
-
-    reset: function() {
-      this.observer.reset();
-    }
-  };
-
-  Text.prototype.bind = function(name, model, path) {
+  Text.prototype.bind = function(name, observable) {
     if (name !== 'textContent')
-      return Node.prototype.bind.call(this, name, model, path);
+      return Node.prototype.bind.call(this, name, observable);
 
-    this.unbind(name);
-    return this.bindings[name] = new NodeBinding(this, 'data', model, path);
+    unbind(this, 'textContent');
+    updateText(this, observable.open(textBinding(this)));
+    return this.bindings.textContent = observable;
   }
 
-  function AttributeBinding(element, attributeName, model, path) {
-    this.conditional = attributeName[attributeName.length - 1] == '?';
-    if (this.conditional) {
-      element.removeAttribute(attributeName);
-      attributeName = attributeName.slice(0, -1);
+  function updateAttribute(el, name, conditional, value) {
+    if (conditional) {
+      if (value)
+        el.setAttribute(name, '');
+      else
+        el.removeAttribute(name);
+      return;
     }
 
-    NodeBinding.call(this, element, attributeName, model, path);
+    el.setAttribute(name, sanitizeValue(value));
   }
 
-  AttributeBinding.prototype = createObject({
-    __proto__: NodeBinding.prototype,
+  function attributeBinding(el, name, conditional) {
+    return function(value) {
+      updateAttribute(el, name, conditional, value);
+    };
+  }
 
-    valueChanged: function(value) {
-      if (this.conditional) {
-        if (value)
-          this.node.setAttribute(this.property, '');
-        else
-          this.node.removeAttribute(this.property);
-        return;
-      }
-
-      this.node.setAttribute(this.property, this.sanitizeBoundValue(value));
+  Element.prototype.bind = function(name, observable) {
+    var conditional = name[name.length - 1] == '?';
+    if (conditional) {
+      this.removeAttribute(name);
+      name = name.slice(0, -1);
     }
-  });
 
-  Element.prototype.bind = function(name, model, path) {
-    this.unbind(name);
-    return this.bindings[name] = new AttributeBinding(this, name, model, path);
+    unbind(this, name);
+
+    updateAttribute(this, name, conditional,
+        observable.open(attributeBinding(this, name, conditional)));
+
+    return this.bindings[name] = observable;
   };
 
   var checkboxEventType;
@@ -12003,36 +12091,44 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   }
 
-  function InputBinding(node, property, model, path) {
-    NodeBinding.call(this, node, property, model, path);
-    this.eventType = getEventForInputType(this.node);
-    this.boundNodeValueChanged = this.nodeValueChanged.bind(this);
-    this.node.addEventListener(this.eventType, this.boundNodeValueChanged,
-                               true);
+  function updateInput(input, property, value, santizeFn) {
+    input[property] = (santizeFn || sanitizeValue)(value);
   }
 
-  InputBinding.prototype = createObject({
-    __proto__: NodeBinding.prototype,
-
-    nodeValueChanged: function() {
-      this.value = this.node[this.property];
-      this.reset();
-      this.postUpdateBinding();
-      Platform.performMicrotaskCheckpoint();
-    },
-
-    postUpdateBinding: function() {},
-
-    close: function() {
-      if (this.closed)
-        return;
-
-      this.node.removeEventListener(this.eventType,
-                                    this.boundNodeValueChanged,
-                                    true);
-      NodeBinding.prototype.close.call(this);
+  function inputBinding(input, property, santizeFn) {
+    return function(value) {
+      return updateInput(input, property, value, santizeFn);
     }
-  });
+  }
+
+  function noop() {}
+
+  function bindInputEvent(input, property, observable, postEventFn) {
+    var eventType = getEventForInputType(input);
+
+    function eventHandler() {
+      observable.setValue(input[property]);
+      observable.discardChanges();
+      (postEventFn || noop)(input);
+      Platform.performMicrotaskCheckpoint();
+    }
+    input.addEventListener(eventType, eventHandler);
+
+    var capturedClose = observable.close;
+    observable.close = function() {
+      if (!capturedClose)
+        return;
+      input.removeEventListener(eventType, eventHandler);
+
+      observable.close = capturedClose;
+      observable.close();
+      capturedClose = undefined;
+    }
+  }
+
+  function booleanSanitize(value) {
+    return Boolean(value);
+  }
 
   // |element| is assumed to be an HTMLInputElement with |type| == 'radio'.
   // Returns an array containing all radio buttons other than |element| that
@@ -12063,124 +12159,123 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   }
 
-  function CheckedBinding(element, model, path) {
-    InputBinding.call(this, element, 'checked', model, path);
+  function checkedPostEvent(input) {
+    // Only the radio button that is getting checked gets an event. We
+    // therefore find all the associated radio buttons and update their
+    // check binding manually.
+    if (input.tagName === 'INPUT' &&
+        input.type === 'radio') {
+      getAssociatedRadioButtons(input).forEach(function(radio) {
+        var checkedBinding = radio.bindings.checked;
+        if (checkedBinding) {
+          // Set the value directly to avoid an infinite call stack.
+          checkedBinding.setValue(false);
+        }
+      });
+    }
   }
 
-  CheckedBinding.prototype = createObject({
-    __proto__: InputBinding.prototype,
-
-    sanitizeBoundValue: function(value) {
-      return Boolean(value);
-    },
-
-    postUpdateBinding: function() {
-      // Only the radio button that is getting checked gets an event. We
-      // therefore find all the associated radio buttons and update their
-      // CheckedBinding manually.
-      if (this.node.tagName === 'INPUT' &&
-          this.node.type === 'radio') {
-        getAssociatedRadioButtons(this.node).forEach(function(radio) {
-          var checkedBinding = radio.bindings.checked;
-          if (checkedBinding) {
-            // Set the value directly to avoid an infinite call stack.
-            checkedBinding.value = false;
-          }
-        });
-      }
-    }
-  });
-
-  HTMLInputElement.prototype.bind = function(name, model, path) {
+  HTMLInputElement.prototype.bind = function(name, observable) {
     if (name !== 'value' && name !== 'checked')
-      return HTMLElement.prototype.bind.call(this, name, model, path);
+      return HTMLElement.prototype.bind.call(this, name, observable);
 
-    this.unbind(name);
+    unbind(this, name);
     this.removeAttribute(name);
-    return this.bindings[name] = name === 'value' ?
-        new InputBinding(this, 'value', model, path) :
-        new CheckedBinding(this, model, path);
+
+    var sanitizeFn = name == 'checked' ? booleanSanitize : sanitizeValue;
+    var postEventFn = name == 'checked' ? checkedPostEvent : noop;
+    bindInputEvent(this, name, observable, postEventFn);
+    updateInput(this, name,
+                observable.open(inputBinding(this, name, sanitizeFn)),
+                sanitizeFn);
+
+    return this.bindings[name] = observable;
   }
 
-  HTMLTextAreaElement.prototype.bind = function(name, model, path) {
+  HTMLTextAreaElement.prototype.bind = function(name, observable) {
     if (name !== 'value')
-      return HTMLElement.prototype.bind.call(this, name, model, path);
+      return HTMLElement.prototype.bind.call(this, name, observable);
 
-    this.unbind(name);
-    this.removeAttribute(name);
-    return this.bindings[name] = new InputBinding(this, name, model, path);
+    unbind(this, 'value');
+    this.removeAttribute('value');
+
+    bindInputEvent(this, 'value', observable);
+    updateInput(this, 'value',
+                observable.open(inputBinding(this, 'value', sanitizeValue)));
+
+    return this.bindings.value = observable;
   }
 
-  function OptionValueBinding(element, model, path) {
-    InputBinding.call(this, element, 'value', model, path);
-  }
-
-  OptionValueBinding.prototype = createObject({
-    __proto__: InputBinding.prototype,
-
-    valueChanged: function(value) {
-      var select = this.node.parentNode instanceof HTMLSelectElement ?
-          this.node.parentNode : undefined;
-      var selectBinding;
-      var oldValue;
-      if (select &&
-          select.bindings &&
-          select.bindings.value instanceof SelectBinding) {
-        selectBinding = select.bindings.value;
-        oldValue = select.value;
-      }
-
-      InputBinding.prototype.valueChanged.call(this, value);
-      if (selectBinding && !selectBinding.closed && select.value !== oldValue)
-        selectBinding.nodeValueChanged();
+  function updateOption(option, value) {
+    var parentNode = option.parentNode;;
+    var select;
+    if (parentNode instanceof HTMLSelectElement &&
+        parentNode.bindings &&
+        parentNode.bindings.value) {
+      select = parentNode;
+      var selectBinding = select.bindings.value;
+      var oldValue = select.value;
     }
-  });
 
-  HTMLOptionElement.prototype.bind = function(name, model, path) {
+    option.value = sanitizeValue(value);;
+
+    if (select && select.value != oldValue) {
+      selectBinding.setValue(select.value);
+      selectBinding.discardChanges();
+      Platform.performMicrotaskCheckpoint();
+    }
+  }
+
+  function optionBinding(option) {
+    return function(value) {
+      updateOption(option, value);
+    }
+  }
+
+  HTMLOptionElement.prototype.bind = function(name, observable) {
     if (name !== 'value')
-      return HTMLElement.prototype.bind.call(this, name, model, path);
+      return HTMLElement.prototype.bind.call(this, name, observable);
 
-    this.unbind(name);
-    this.removeAttribute(name);
-    return this.bindings[name] = new OptionValueBinding(this, model, path);
+    unbind(this, 'value');
+    this.removeAttribute('value');
+
+    bindInputEvent(this, 'value', observable);
+    updateOption(this, observable.open(optionBinding(this)));
+    return this.bindings.value = observable;
   }
 
-  function SelectBinding(element, property, model, path) {
-    InputBinding.call(this, element, property, model, path);
+  function updateSelect(select, property, value, retries) {
+    select[property] = value;
+    if (!retries || select[property] == value)
+      return
+
+    // The binding may wish to bind to an <option> which has not yet been
+    // produced by a child <template>. Delay |retries| times.
+    ensureScheduled(function() {
+      updateSelect(select, property, value, retries - 1);
+    });
   }
 
-  SelectBinding.prototype = createObject({
-    __proto__: InputBinding.prototype,
-
-    valueChanged: function(value) {
-      this.node[this.property] = value;
-      if (this.node[this.property] == value)
-        return;
-
-      // The binding may wish to bind to an <option> which has not yet been
-      // produced by a child <template>. Delay a maximum of two times: once for
-      // each of <optgroup> and <option>
-      var maxRetries = 2;
-      var self = this;
-      function delaySetSelectedIndex() {
-        self.node[self.property] = value;
-        if (self.node[self.property] != value && maxRetries--)
-          ensureScheduled(delaySetSelectedIndex);
-      }
-      ensureScheduled(delaySetSelectedIndex);
+  function selectBinding(select, property) {
+    return function(value) {
+      updateSelect(select, property, value);
     }
-  });
+  }
 
-  HTMLSelectElement.prototype.bind = function(name, model, path) {
+  HTMLSelectElement.prototype.bind = function(name, observable) {
     if (name === 'selectedindex')
       name = 'selectedIndex';
 
     if (name !== 'selectedIndex' && name !== 'value')
-      return HTMLElement.prototype.bind.call(this, name, model, path);
+      return HTMLElement.prototype.bind.call(this, name, observable);
 
-    this.unbind(name);
+
+    unbind(this, name);
     this.removeAttribute(name);
-    return this.bindings[name] = new SelectBinding(this, name, model, path);
+
+    bindInputEvent(this, name, observable);
+    updateSelect(this, name, observable.open(selectBinding(this, name)), 2);
+    return this.bindings[name] = observable;
   }
 
   // TODO(rafaelw): We should polyfill a Microtask Promise and define it if it isn't.
@@ -12197,7 +12292,8 @@ PointerGestureEvent.prototype.preventTap = function() {
       this.scheduled = [];
       this.scheduledIds = [];
       this.running = false;
-      this.observer = new PathObserver(this, 'value', this.run, this);
+      this.observer = new PathObserver(this, 'value');
+      this.observer.open(this.run, this);
     }
 
     Runner.prototype = {
@@ -12422,7 +12518,8 @@ PointerGestureEvent.prototype.preventTap = function() {
       this.scheduled = [];
       this.scheduledIds = [];
       this.running = false;
-      this.observer = new PathObserver(this, 'value', this.run, this);
+      this.observer = new PathObserver(this, 'value');
+      this.observer.open(this.run, this);
     }
 
     Runner.prototype = {
@@ -12706,46 +12803,36 @@ PointerGestureEvent.prototype.preventTap = function() {
   }
 
   mixin(HTMLTemplateElement.prototype, {
-    bind: function(name, model, path) {
+    bind: function(name, observer) {
       if (!this.iterator_)
         this.iterator_ = new TemplateIterator(this);
 
       this.bindings = this.bindings || {};
       if (name === 'bind') {
-        this.iterator_.hasBind = true;
-        this.iterator_.bindModel = model;
-        this.iterator_.bindPath = path;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
-
+        observer.open(this.iterator_.depsChanged, this.iterator_);
+        this.unbind(name);
+        this.iterator_.bindObserver = observer;
+        this.iterator_.depsChanged();
         return this.bindings.bind = this.iterator_;
       }
 
       if (name === 'repeat') {
-        this.iterator_.hasRepeat = true;
-        this.iterator_.repeatModel = model;
-        this.iterator_.repeatPath = path;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
+        observer.open(this.iterator_.depsChanged, this.iterator_);
+        this.unbind(name);
+        this.iterator_.repeatObserver = observer;
+        this.iterator_.depsChanged();
         return this.bindings.repeat = this.iterator_;
       }
 
       if (name === 'if') {
-        this.iterator_.hasIf = true;
-        this.iterator_.ifModel = model;
-        this.iterator_.ifPath = path;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
+        observer.open(this.iterator_.depsChanged, this.iterator_);
+        this.unbind(name);
+        this.iterator_.ifObserver = observer;
+        this.iterator_.depsChanged();
         return this.bindings.if = this.iterator_;
       }
 
-      return HTMLElement.prototype.bind.call(this, name, model, path);
+      return HTMLElement.prototype.bind.call(this, name, observer);
     },
 
     unbind: function(name) {
@@ -12753,47 +12840,39 @@ PointerGestureEvent.prototype.preventTap = function() {
         if (!this.iterator_)
           return;
 
-        this.iterator_.hasBind = false;
-        this.iterator_.bindModel = undefined;
-        this.iterator_.bindPath = undefined;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
-
+        if (this.iterator_.bindObserver)
+          this.iterator_.bindObserver.close();
+        this.iterator_.bindObserver = undefined;
+        this.iterator_.depsChanged();
         return this.bindings.bind = undefined;
       }
 
       if (name === 'repeat') {
         if (!this.iterator_)
           return;
-        this.iterator_.hasRepeat = false;
-        this.iterator_.repeatModel = undefined;
-        this.iterator_.repeatPath = undefined;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
+
+        if (this.iterator_.repeatObserver)
+          this.iterator_.repeatObserver.close();
+        this.iterator_.repeatObserver = undefined;
+        this.iterator_.depsChanged();
         return this.bindings.repeat = undefined;
       }
 
       if (name === 'if') {
         if (!this.iterator_)
           return;
-        this.iterator_.hasIf = false;
-        this.iterator_.ifModel = undefined;
-        this.iterator_.ifPath = undefined;
-        if (!this.iterator_.depsChanging) {
-          this.iterator_.depsChanging = true;
-          ensureScheduled(this.iterator_);
-        }
+
+        if (this.iterator_.ifObserver)
+          this.iterator_.ifObserver.close();
+        this.iterator_.ifObserver = undefined;
+        this.iterator_.depsChanged();
         return this.bindings.if = undefined;
       }
 
       return HTMLElement.prototype.unbind.call(this, name);
     },
 
-    createInstance: function(model, bound) {
+    createInstance: function(model, instanceBindings) {
       var content = this.ref.content;
       var map = content.bindingMap_;
       if (!map) {
@@ -12806,7 +12885,8 @@ PointerGestureEvent.prototype.preventTap = function() {
       var stagingDocument = getTemplateStagingDocument(this);
       var instance = deepCloneIgnoreTemplateContent(content, stagingDocument);
 
-      addMapBindings(instance, map, model, this.bindingDelegate_, bound);
+      addMapBindings(instance, map, model, this.bindingDelegate_,
+                     instanceBindings);
       // TODO(rafaelw): We can do this more lazily, but setting a sentinel
       // in the parent of the template element, and creating it when it's
       // asked for by walking back to find the iterating template.
@@ -12925,58 +13005,47 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
 
     return tokens;
+  };
+
+  function processSinglePathBinding(name, tokens, node, model) {
+    var delegateFn = tokens[2];
+    var delegateValue = delegateFn && delegateFn(model, node);
+    if (Observer.isObservable(delegateValue))
+      return delegateValue;
+
+    var observer = new PathObserver(model, tokens[1]);
+    return tokens.isSimplePath ? observer :
+        new ObserverTransform(observer, tokens.combinator);
   }
 
-  var valuePath = Path.get('value');
+  function processBinding(name, tokens, node, model) {
+    var observer = new CompoundObserver();
 
-  function processBindings(bindings, node, model, bound) {
-    for (var i = 0; i < bindings.length; i += 2) {
-      var name = bindings[i];
-      var tokens = bindings[i + 1];
-      var bindingModel = model;
-      var bindingPath = tokens[1];
-      if (tokens.hasOnePath) {
-        var delegateFn = tokens[2];
-        var delegateBinding = delegateFn && delegateFn(model, node);
+    for (var i = 1; i < tokens.length; i += 3) {
+      var delegateFn = tokens[i + 1];
+      var delegateValue = delegateFn && delegateFn(model, node);
 
-        if (delegateBinding !== undefined) {
-          bindingModel = delegateBinding;
-          bindingPath = valuePath;
-        }
-
-        if (!tokens.isSimplePath) {
-          bindingModel = new PathObserver(bindingModel, bindingPath, undefined,
-                                          undefined,
-                                          tokens.combinator);
-          bindingPath = valuePath;
-        }
+      if (Observer.isObservable(delegateValue)) {
+        observer.addObserver(delegateValue);
       } else {
-        var observer = new CompoundPathObserver(undefined,
-                                                undefined,
-                                                tokens.combinator);
-
-        for (var j = 1; j < tokens.length; j += 3) {
-          var subModel = model;
-          var subPath = tokens[j];
-          var delegateFn = tokens[j + 1];
-          var delegateBinding = delegateFn && delegateFn(subModel, name, node);
-
-          if (delegateBinding !== undefined) {
-            subModel = delegateBinding;
-            subPath = valuePath;
-          }
-
-          observer.addPath(subModel, subPath);
-        }
-
-        observer.start();
-        bindingModel = observer;
-        bindingPath = valuePath;
+        observer.addPath(model, tokens[i]);
       }
+    }
 
-      var binding = node.bind(name, bindingModel, bindingPath);
-      if (bound)
-        bound.push(binding);
+    return new ObserverTransform(observer, tokens.combinator);
+  }
+
+  function processBindings(bindings, node, model, instanceBindings) {
+    for (var i = 0; i < bindings.length; i += 2) {
+      var name = bindings[i]
+      var tokens = bindings[i + 1];
+      var observer = tokens.hasOnePath ?
+          processSinglePathBinding(name, tokens, node, model) :
+          processBinding(name, tokens, node, model);
+
+      var binding = node.bind(name, observer);
+      if (instanceBindings)
+        instanceBindings.push(binding);
     }
   }
 
@@ -13043,7 +13112,7 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   }
 
-  function addMapBindings(node, bindings, model, delegate, bound) {
+  function addMapBindings(node, bindings, model, delegate, instanceBindings) {
     if (!bindings)
       return;
 
@@ -13055,14 +13124,15 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
 
     if (bindings.length)
-      processBindings(bindings, node, model, bound);
+      processBindings(bindings, node, model, instanceBindings);
 
     if (!bindings.children)
       return;
 
     var i = 0;
     for (var child = node.firstChild; child; child = child.nextSibling) {
-      addMapBindings(child, bindings.children[i++], model, delegate, bound);
+      addMapBindings(child, bindings.children[i++], model, delegate,
+                     instanceBindings);
     }
   }
 
@@ -13153,64 +13223,33 @@ PointerGestureEvent.prototype.preventTap = function() {
     this.iteratedValue = undefined;
     this.arrayObserver = undefined;
 
-    this.depsChanged = false;
-    this.hasRepeat = false;
-    this.repeatModel = undefined;
-    this.repeatPath = undefined;
-    this.hasBind = false;
-    this.bindModel = undefined;
-    this.bindPath = undefined;
-    this.hasIf = false;
-    this.ifModel = undefined;
-    this.ifPath = undefined;
+    this.repeatObserver = undefined;
+    this.bindObserver = undefined;
+    this.ifObserver = undefined;
   }
 
   TemplateIterator.prototype = {
+    depsChanged: function() {
+      ensureScheduled(this);
+    },
+
+    // Called as a result ensureScheduled (above).
     resolve: function() {
-      this.depsChanging = false;
-      if (this.valueObserver) {
-        this.valueObserver.close();
-        this.valueObserver = undefined;
+      if (this.ifObserver) {
+        var ifValue = this.ifObserver.discardChanges();
+        if (!ifValue) {
+          this.valueChanged(); // remove any instances
+          return;
+        }
       }
 
-      if (!this.hasRepeat && !this.hasBind) {
-        this.valueChanged();
-        return;
-      }
+      var iterateValue;
+      if (this.repeatObserver)
+        iterateValue = this.repeatObserver.discardChanges();
+      else if (this.bindObserver)
+        iterateValue = [this.bindObserver.discardChanges()];
 
-      var isRepeat = this.hasRepeat === true;
-      var model = isRepeat ? this.repeatModel : this.bindModel;
-      var path = isRepeat ? this.repeatPath : this.bindPath;
-
-      if (!this.hasIf) {
-        var valueFn = this.hasRepeat ? undefined : function(value) {
-          return [value];
-        };
-
-        this.valueObserver = new PathObserver(model,
-                                              path,
-                                              this.valueChanged,
-                                              this,
-                                              valueFn);
-      } else {
-        var valueFn = function(values) {
-          var modelValue = values[0];
-          var ifValue = values[1]
-          if (!ifValue)
-            return;
-          return isRepeat ? modelValue : [ modelValue ];
-        };
-
-        this.valueObserver = new CompoundPathObserver(this.valueChanged,
-                                                      this,
-                                                      valueFn);
-
-        this.valueObserver.addPath(model, path);
-        this.valueObserver.addPath(this.ifModel, this.ifPath);
-        this.valueObserver.start();
-      }
-
-      this.valueChanged(this.valueObserver.value);
+      return this.valueChanged(iterateValue);
     },
 
     valueChanged: function(value) {
@@ -13222,8 +13261,8 @@ PointerGestureEvent.prototype.preventTap = function() {
       this.iteratedValue = value;
 
       if (this.iteratedValue) {
-        this.arrayObserver =
-            new ArrayObserver(this.iteratedValue, this.handleSplices, this);
+        this.arrayObserver = new ArrayObserver(this.iteratedValue);
+        this.arrayObserver.open(this.handleSplices, this);
       }
 
       var splices = ArrayObserver.calculateSplices(this.iteratedValue || [],
@@ -13251,7 +13290,8 @@ PointerGestureEvent.prototype.preventTap = function() {
 
     // TODO(rafaelw): If we inserting sequences of instances we can probably
     // avoid lots of calls to getTerminatorAt(), or cache its result.
-    insertInstanceAt: function(index, fragment, instanceNodes, bound) {
+    insertInstanceAt: function(index, fragment, instanceNodes,
+                               instanceBindings) {
       var previousTerminator = this.getTerminatorAt(index - 1);
       var terminator = previousTerminator;
       if (fragment)
@@ -13259,7 +13299,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       else if (instanceNodes)
         terminator = instanceNodes[instanceNodes.length - 1] || terminator;
 
-      this.terminators.splice(index*2, 0, terminator, bound);
+      this.terminators.splice(index*2, 0, terminator, instanceBindings);
       var parent = this.templateElement_.parentNode;
       var insertBeforeNode = previousTerminator.nextSibling;
 
@@ -13275,7 +13315,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       var instanceNodes = [];
       var previousTerminator = this.getTerminatorAt(index - 1);
       var terminator = this.getTerminatorAt(index);
-      instanceNodes.bound = this.terminators[index*2 + 1];
+      instanceNodes.instanceBindings = this.terminators[index*2 + 1];
       this.terminators.splice(index*2, 2);
 
       var parent = this.templateElement_.parentNode;
@@ -13335,26 +13375,28 @@ PointerGestureEvent.prototype.preventTap = function() {
           var model = this.iteratedValue[addIndex];
           var fragment = undefined;
           var instanceNodes = instanceCache.get(model);
-          var bound;
+          var instanceBindings;
           if (instanceNodes) {
             instanceCache.delete(model);
-            bound = instanceNodes.bound;
+            instanceBindings = instanceNodes.instanceBindings;
           } else {
-            bound = [];
+            instanceBindings = [];
             if (this.instanceModelFn_)
               model = this.instanceModelFn_(model);
 
             if (model !== undefined) {
-              fragment = this.templateElement_.createInstance(model, bound);
+              fragment = this.templateElement_.createInstance(model,
+                                                              instanceBindings);
             }
           }
 
-          this.insertInstanceAt(addIndex, fragment, instanceNodes, bound);
+          this.insertInstanceAt(addIndex, fragment, instanceNodes,
+                                instanceBindings);
         }
       }, this);
 
       instanceCache.forEach(function(instanceNodes) {
-        this.closeInstanceBindings(instanceNodes.bound);
+        this.closeInstanceBindings(instanceNodes.instanceBindings);
       }, this);
 
       if (this.instancePositionChangedFn_)
@@ -13407,9 +13449,9 @@ PointerGestureEvent.prototype.preventTap = function() {
       }
     },
 
-    closeInstanceBindings: function(bound) {
-      for (var i = 0; i < bound.length; i++) {
-        bound[i].close();
+    closeInstanceBindings: function(instanceBindings) {
+      for (var i = 0; i < instanceBindings.length; i++) {
+        instanceBindings[i].close();
       }
     },
 
@@ -13430,9 +13472,16 @@ PointerGestureEvent.prototype.preventTap = function() {
       }
 
       this.terminators.length = 0;
-      if (this.valueObserver)
-        this.valueObserver.close();
-      this.valueObserver = undefined;
+      if (this.bindObserver)
+        this.bindObserver.close();
+      this.bindObserver = undefined;
+      if (this.repeatObserver)
+        this.repeatObserver.close();
+      this.repeatObserver = undefined;
+      if (this.ifObserver)
+        this.ifObserver.close();
+      this.ifObserver = undefined;
+
       this.templateElement_.iterator_ = undefined;
       this.closed = true;
     }
@@ -14824,6 +14873,17 @@ PointerGestureEvent.prototype.preventTap = function() {
     createThisExpression: notImplemented
   }
 
+  function ConstantObservable(value) {
+    this.value_ = value;
+  }
+
+  ConstantObservable.prototype = {
+    open: function() { return this.value_; },
+    discardChanges: function() { return this.value_; },
+    deliver: function() {},
+    close: function() {},
+  }
+
   function Expression(delegate) {
     this.scopeIdent = delegate.scopeIdent;
     this.indexIdent = delegate.indexIdent;
@@ -14843,7 +14903,8 @@ PointerGestureEvent.prototype.preventTap = function() {
       var paths = this.paths;
       if (!paths.length) {
         // only literals in expression.
-        return { value: this.getValue(undefined, filterRegistry, model) };
+        return new ConstantObservable(this.getValue(undefined, filterRegistry,
+                                                    model));
       }
 
       var self = this;
@@ -14858,7 +14919,7 @@ PointerGestureEvent.prototype.preventTap = function() {
           // is a scalar value.
           values = self.paths[0].getValueFrom(model);
         } else {
-          // Multiple-deps uses a CompoundPathObserver whose callback is an
+          // Multiple-deps uses a CompoundObserver whose callback is an
           // array of values.
           values = [];
           for (var i = 0; i < self.paths.length; i++) {
@@ -14867,22 +14928,20 @@ PointerGestureEvent.prototype.preventTap = function() {
         }
 
         self.setValue(model, newValue, values, filterRegistry, model);
+        return newValue;
       }
 
+      var observer;
       if (paths.length === 1) {
-        return new PathObserver(model, paths[0], undefined, undefined, valueFn,
-                                setValueFn);
+        observer = new PathObserver(model, paths[0]);
+      } else {
+        observer = new CompoundObserver();
+        for (var i = 0; i < paths.length; i++) {
+          observer.addPath(model, paths[i]);
+        }
       }
 
-      var binding = new CompoundPathObserver(undefined, undefined, valueFn,
-                                             setValueFn);
-
-      for (var i = 0; i < paths.length; i++) {
-        binding.addPath(model, paths[i]);
-      }
-
-      binding.start();
-      return binding;
+      return new ObserverTransform(observer, valueFn, setValueFn, true);
     },
 
     getValue: function(depsValues, filterRegistry, context) {
