@@ -1,0 +1,17 @@
+{
+  "name": "polyfill-webcomponents",
+  "repo": "timoxley/polyfill-webcomponents",
+  "version": "0.0.8",
+  "description": "Web Component Polyfills courtesy of Polymer",
+  "main": "index.js",
+  "scripts": [
+    "index.js"
+  ],
+  "keywords": [
+    "template",
+    "shadowdom",
+    "observe",
+    "WeakMap"
+  ],
+  "license": "BSD-2-Clause"
+}
