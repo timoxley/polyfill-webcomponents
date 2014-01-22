@@ -2,18 +2,25 @@ all: index.js
 
 index.js: build
 
-build: build/tools
-	-cd build/tools/components/platform-dev && git checkout .
+build: build/platform.concat.js
+
+build/platform.concat.js: build/tools/components/platform-dev/build/platform.concat.js
+	sh replace.sh
 	-rm build/platform.concat.js
-	-cd build/tools && sh bin/pull-all.sh
-	cd build/tools/components/platform-dev && npm install
+
+build/tools/components/platform-dev/build/platform.concat.js: build/tools/components/platform-dev
+	-rm build/platform.concat.js
 	cd build/tools/components/platform-dev && cp build-lite.json build-lite.old.json
 	cd build/tools/components/platform-dev && cp build.json build-lite.json
 	cd build/tools/components/platform-dev && grunt build-lite
 	cd build/tools/components/platform-dev && mv build-lite.old.json build-lite.json
 	cp build/tools/components/platform-dev/build/platform.concat.js build
-	sh replace.sh
-	rm build/platform.concat.js
+
+build/tools/components/platform-dev: build/tools
+	-cd build/tools/components/platform-dev && git checkout .
+	-rm build/platform.concat.js
+	-cd build/tools && sh bin/pull-all.sh
+	cd build/tools/components/platform-dev && npm install
 
 build/tools:
 	-mkdir build
@@ -29,4 +36,4 @@ clean:
 	rm -Rf build
 
 
-.PHONY: all test replace
+.PHONY: clean all test
