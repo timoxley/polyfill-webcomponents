@@ -4,7 +4,7 @@ set -e
 
 ### Here be some dodgy modifications for browserify compatibility ###
 
-cat build/platform/platform.concat.js > index.src.js
+cat build/platform.concat.js > index.src.js
 
 
 # temporary workaround for assumptions about
