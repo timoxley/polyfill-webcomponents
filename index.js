@@ -13614,7 +13614,7 @@ PointerGestureEvent.prototype.preventTap = function() {
     },
 
     get bindingDelegate() {
-      return this.delegate_.raw;
+      return this.delegate_ && this.delegate_.raw;
     },
 
     setDelegate_: function(delegate) {
