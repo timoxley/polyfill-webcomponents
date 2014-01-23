@@ -221,7 +221,7 @@ if (typeof WeakMap === 'undefined') {
       this.push(part);
     }, this);
 
-    if (hasEval && !hasObserve && this.length) {
+    if (hasEval && this.length) {
       this.getValueFrom = this.compiledGetValueFromFn();
     }
   }
@@ -259,15 +259,23 @@ if (typeof WeakMap === 'undefined') {
       return this.join('.');
     },
 
-    getValueFrom: function(obj, observedSet) {
+    getValueFrom: function(obj, directObserver) {
       for (var i = 0; i < this.length; i++) {
         if (obj == null)
           return;
-        if (observedSet)
-          observedSet.observe(obj);
         obj = obj[this[i]];
       }
       return obj;
+    },
+
+    iterateObjects: function(obj, observe) {
+      for (var i = 0; i < this.length; i++) {
+        if (i)
+          obj = obj[this[i - 1]];
+        if (!obj)
+          return;
+        observe(obj);
+      }
     },
 
     compiledGetValueFromFn: function() {
@@ -319,11 +327,12 @@ if (typeof WeakMap === 'undefined') {
   function dirtyCheck(observer) {
     var cycles = 0;
     while (cycles < MAX_DIRTY_CHECK_CYCLES && observer.check_()) {
-      observer.report_();
       cycles++;
     }
     if (global.testingExposeCycleCount)
       global.dirtyCheckCycleCount = cycles;
+
+    return cycles > 0;
   }
 
   function objectIsEmpty(object) {
@@ -376,41 +385,229 @@ if (typeof WeakMap === 'undefined') {
     };
   }
 
-  function copyObject(object, opt_copy) {
-    var copy = opt_copy || (Array.isArray(object) ? [] : {});
-    for (var prop in object) {
-      copy[prop] = object[prop];
-    };
-    if (Array.isArray(object))
-      copy.length = object.length;
-    return copy;
+  var eomTasks = [];
+  function runEOMTasks() {
+    if (!eomTasks.length)
+      return false;
+
+    for (var i = 0; i < eomTasks.length; i++) {
+      eomTasks[i]();
+    }
+    eomTasks.length = 0;
+    return true;
   }
 
-  function isObservable(obj) {
-    return obj &&
-           typeof obj.open == 'function' &&
-           typeof obj.close == 'function';
+  var runEOM = hasObserve ? (function(){
+    var eomObj = { pingPong: true };
+    var eomRunScheduled = false;
+
+    Object.observe(eomObj, function() {
+      runEOMTasks();
+      eomRunScheduled = false;
+    });
+
+    return function(fn) {
+      eomTasks.push(fn);
+      if (!eomRunScheduled) {
+        eomRunScheduled = true;
+        eomObj.pingPong = !eomObj.pingPong;
+      }
+    };
+  })() :
+  (function() {
+    return function(fn) {
+      eomTasks.push(fn);
+    };
+  })();
+
+  var observedObjectCache = [];
+
+  function newObservedObject() {
+    var observer;
+    var object;
+    var discardRecords = false;
+    var first = true;
+
+    function callback(records) {
+      if (observer && observer.state_ === OPENED && !discardRecords)
+        observer.check_(records);
+    }
+
+    return {
+      open: function(obs) {
+        if (observer)
+          throw Error('ObservedObject in use');
+
+        if (!first)
+          Object.deliverChangeRecords(callback);
+
+        observer = obs;
+        first = false;
+      },
+      observe: function(obj, arrayObserve) {
+        object = obj;
+        if (arrayObserve)
+          Array.observe(object, callback);
+        else
+          Object.observe(object, callback);
+      },
+      deliver: function(discard) {
+        discardRecords = discard;
+        Object.deliverChangeRecords(callback);
+        discardRecords = false;
+      },
+      close: function() {
+        observer = undefined;
+        Object.unobserve(object, callback);
+        observedObjectCache.push(this);
+      }
+    };
+  }
+
+  function getObservedObject(observer, object, arrayObserve) {
+    var dir = observedObjectCache.pop() || newObservedObject();
+    dir.open(observer);
+    dir.observe(object, arrayObserve);
+    return dir;
+  }
+
+  var emptyArray = [];
+  var observedSetCache = [];
+
+  function newObservedSet() {
+    var observers = [];
+    var observerCount = 0;
+    var objects = [];
+    var toRemove = emptyArray;
+    var resetNeeded = false;
+    var resetScheduled = false;
+
+    function observe(obj) {
+      if (!isObject(obj))
+        return;
+
+      var index = toRemove.indexOf(obj);
+      if (index >= 0) {
+        toRemove[index] = undefined;
+        objects.push(obj);
+      } else if (objects.indexOf(obj) < 0) {
+        objects.push(obj);
+        Object.observe(obj, callback);
+      }
+
+      observe(Object.getPrototypeOf(obj));
+    }
+
+    function reset() {
+      resetScheduled = false;
+      if (!resetNeeded)
+        return;
+
+      var objs = toRemove === emptyArray ? [] : toRemove;
+      toRemove = objects;
+      objects = objs;
+
+      var observer;
+      for (var id in observers) {
+        observer = observers[id];
+        if (!observer || observer.state_ != OPENED)
+          continue;
+
+        observer.iterateObjects_(observe);
+      }
+
+      for (var i = 0; i < toRemove.length; i++) {
+        var obj = toRemove[i];
+        if (obj)
+          Object.unobserve(obj, callback);
+      }
+
+      toRemove.length = 0;
+    }
+
+    function scheduleReset() {
+      if (resetScheduled)
+        return;
+
+      resetNeeded = true;
+      resetScheduled = true;
+      runEOM(reset);
+    }
+
+    function callback() {
+      var observer;
+
+      for (var id in observers) {
+        observer = observers[id];
+        if (!observer || observer.state_ != OPENED)
+          continue;
+
+        observer.check_();
+      }
+
+      scheduleReset();
+    }
+
+    var record = {
+      object: undefined,
+      objects: objects,
+      open: function(obs) {
+        observers[obs.id_] = obs;
+        observerCount++;
+        obs.iterateObjects_(observe);
+      },
+      close: function(obs) {
+        var anyLeft = false;
+
+        observers[obs.id_] = undefined;
+        observerCount--;
+
+        if (observerCount) {
+          scheduleReset();
+          return;
+        }
+        resetNeeded = false;
+
+        for (var i = 0; i < objects.length; i++) {
+          Object.unobserve(objects[i], callback);
+          Observer.unobservedCount++;
+        }
+
+        observers.length = 0;
+        objects.length = 0;
+        observedSetCache.push(this);
+      },
+      reset: scheduleReset
+    };
+
+    return record;
+  }
+
+  var lastObservedSet;
+
+  function getObservedSet(observer, obj) {
+    if (!lastObservedSet || lastObservedSet.object !== obj) {
+      lastObservedSet = observedSetCache.pop() || newObservedSet();
+      lastObservedSet.object = obj;
+    }
+    lastObservedSet.open(observer);
+    return lastObservedSet;
   }
 
   var UNOPENED = 0;
   var OPENED = 1;
   var CLOSED = 2;
+  var RESETTING = 3;
+
+  var nextObserverId = 1;
+
   function Observer() {
     this.state_ = UNOPENED;
-
-    this.value_ = undefined;
     this.callback_ = undefined;
     this.target_ = undefined; // TODO(rafaelw): Should be WeakRef
-    this.reporting_ = true;
-    this.reportArgs_ = undefined;
-    if (hasObserve) {
-      var self = this;
-      this.boundInternalCallback_ = function(records) {
-        self.internalCallback_(records);
-      };
-    }
-
-    addToAll(this);
+    this.directObserver_ = undefined;
+    this.value_ = undefined;
+    this.id_ = nextObserverId++;
   }
 
   Observer.prototype = {
@@ -418,32 +615,19 @@ if (typeof WeakMap === 'undefined') {
       if (this.state_ != UNOPENED)
         throw Error('Observer has already been opened.');
 
+      addToAll(this);
       this.callback_ = callback;
       this.target_ = target;
       this.state_ = OPENED;
       this.connect_();
-      this.sync_(true);
       return this.value_;
-    },
-
-    getValue: function() {
-      return this.value_;
-    },
-
-    internalCallback_: function(records) {
-      if (this.state_ != OPENED)
-        return;
-      if (this.reporting_ && this.check_(records)) {
-        this.report_();
-        if (this.testingResults)
-          this.testingResults.anyChanged = true;
-      }
     },
 
     close: function() {
-      if (this.state_ == CLOSED)
+      if (this.state_ != OPENED)
         return;
 
+      removeFromAll(this);
       this.state_ = CLOSED;
       this.disconnect_();
       this.value_ = undefined;
@@ -451,36 +635,16 @@ if (typeof WeakMap === 'undefined') {
       this.target_ = undefined;
     },
 
-    deliver: function(testingResults) {
+    deliver: function() {
       if (this.state_ != OPENED)
         return;
 
-      if (hasObserve) {
-        if (this.deliverDeps_)
-          this.deliverDeps_();
-
-        this.testingResults = testingResults;
-        Object.deliverChangeRecords(this.boundInternalCallback_);
-        this.testingResults = undefined;
-      } else {
-        dirtyCheck(this);
-      }
+      dirtyCheck(this);
     },
 
-    report_: function() {
-      if (!this.reporting_)
-        return;
-
-      this.sync_(false);
-      if (this.callback_) {
-        this.invokeCallback_(this.reportArgs_);
-      }
-      this.reportArgs_ = undefined;
-    },
-
-    invokeCallback_: function(args) {
+    report_: function(changes) {
       try {
-        this.callback_.apply(this.target_, args);
+        this.callback_.apply(this.target_, changes);
       } catch (ex) {
         Observer._errorThrownDuringCallback = true;
         console.error('Exception caught during observer callback: ' +
@@ -489,21 +653,12 @@ if (typeof WeakMap === 'undefined') {
     },
 
     discardChanges: function() {
-      if (this.state_ != OPENED)
-        throw Error('Observer is not open');
-
-      if (hasObserve) {
-        this.reporting_ = false;
-        Object.deliverChangeRecords(this.boundInternalCallback_);
-        this.reporting_ = true;
-      }
-
-      this.sync_(true);
+      this.check_(undefined, true);
       return this.value_;
     }
   }
 
-  var collectObservers = !hasObserve || global.forceCollectObservers;
+  var collectObservers = !hasObserve;
   var allObservers;
   Observer._allObserversCount = 0;
 
@@ -512,11 +667,15 @@ if (typeof WeakMap === 'undefined') {
   }
 
   function addToAll(observer) {
+    Observer._allObserversCount++;
     if (!collectObservers)
       return;
 
     allObservers.push(observer);
-    Observer._allObserversCount++;
+  }
+
+  function removeFromAll(observer) {
+    Observer._allObserversCount--;
   }
 
   var runningMicrotaskCheckpoint = false;
@@ -540,34 +699,31 @@ if (typeof WeakMap === 'undefined') {
     runningMicrotaskCheckpoint = true;
 
     var cycles = 0;
-    var results = {};
+    var anyChanged, toCheck;
 
     do {
       cycles++;
-      var toCheck = allObservers;
+      toCheck = allObservers;
       allObservers = [];
-      results.anyChanged = false;
+      anyChanged = false;
 
       for (var i = 0; i < toCheck.length; i++) {
         var observer = toCheck[i];
         if (observer.state_ != OPENED)
           continue;
 
-        if (hasObserve) {
-          observer.deliver(results);
-        } else if (observer.check_()) {
-          results.anyChanged = true;
-          observer.report_();
-        }
+        if (observer.check_())
+          anyChanged = true;
 
         allObservers.push(observer);
       }
-    } while (cycles < MAX_DIRTY_CHECK_CYCLES && results.anyChanged);
+      if (runEOMTasks())
+        anyChanged = true;
+    } while (cycles < MAX_DIRTY_CHECK_CYCLES && anyChanged);
 
     if (global.testingExposeCycleCount)
       global.dirtyCheckCycleCount = cycles;
 
-    Observer._allObserversCount = allObservers.length;
     runningMicrotaskCheckpoint = false;
   };
 
@@ -586,17 +742,29 @@ if (typeof WeakMap === 'undefined') {
   ObjectObserver.prototype = createObject({
     __proto__: Observer.prototype,
 
-    connect_: function() {
-      if (hasObserve)
-        Object.observe(this.value_, this.boundInternalCallback_);
+    arrayObserve: false,
+
+    connect_: function(callback, target) {
+      if (hasObserve) {
+        this.directObserver_ = getObservedObject(this, this.value_,
+                                                 this.arrayObserve);
+      } else {
+        this.oldObject_ = this.copyObject(this.value_);
+      }
+
     },
 
-    sync_: function(hard) {
-      if (!hasObserve)
-        this.oldObject_ = copyObject(this.value_);
+    copyObject: function(object) {
+      var copy = Array.isArray(object) ? [] : {};
+      for (var prop in object) {
+        copy[prop] = object[prop];
+      };
+      if (Array.isArray(object))
+        copy.length = object.length;
+      return copy;
     },
 
-    check_: function(changeRecords) {
+    check_: function(changeRecords, skipChanges) {
       var diff;
       var oldValues;
       if (hasObserve) {
@@ -614,20 +782,47 @@ if (typeof WeakMap === 'undefined') {
       if (diffIsEmpty(diff))
         return false;
 
-      this.reportArgs_ =
-          [diff.added || {}, diff.removed || {}, diff.changed || {}];
-      this.reportArgs_.push(function(property) {
-        return oldValues[property];
-      });
+      if (!hasObserve)
+        this.oldObject_ = this.copyObject(this.value_);
+
+      this.report_([
+        diff.added || {},
+        diff.removed || {},
+        diff.changed || {},
+        function(property) {
+          return oldValues[property];
+        }
+      ]);
 
       return true;
     },
 
     disconnect_: function() {
-      if (!hasObserve)
+      if (hasObserve) {
+        this.directObserver_.close();
+        this.directObserver_ = undefined;
+      } else {
         this.oldObject_ = undefined;
-      else if (this.value_)
-        Object.unobserve(this.value_, this.boundInternalCallback_);
+      }
+    },
+
+    deliver: function() {
+      if (this.state_ != OPENED)
+        return;
+
+      if (hasObserve)
+        this.directObserver_.deliver(false);
+      else
+        dirtyCheck(this);
+    },
+
+    discardChanges: function() {
+      if (this.directObserver_)
+        this.directObserver_.deliver(true);
+      else
+        this.oldObject_ = this.copyObject(this.value_);
+
+      return this.value_;
     }
   });
 
@@ -638,16 +833,13 @@ if (typeof WeakMap === 'undefined') {
   }
 
   ArrayObserver.prototype = createObject({
+
     __proto__: ObjectObserver.prototype,
 
-    connect_: function() {
-      if (hasObserve)
-        Array.observe(this.value_, this.boundInternalCallback_);
-    },
+    arrayObserve: true,
 
-    sync_: function() {
-      if (!hasObserve)
-        this.oldObject_ = this.value_.slice();
+    copyObject: function(arr) {
+      return arr.slice();
     },
 
     check_: function(changeRecords) {
@@ -664,7 +856,10 @@ if (typeof WeakMap === 'undefined') {
       if (!splices || !splices.length)
         return false;
 
-      this.reportArgs_ = [splices];
+      if (!hasObserve)
+        this.oldObject_ = this.copyObject(this.value_);
+
+      this.report_([splices]);
       return true;
     }
   });
@@ -682,117 +877,45 @@ if (typeof WeakMap === 'undefined') {
     });
   };
 
-  function ObservedSet(callback) {
-    this.arr = [];
-    this.callback_ = callback;
-    this.isObserved = true;
-  }
-
-  // TODO(rafaelw): Consider surfacing a way to avoid observing prototype
-  // ancestors which are expected not to change (e.g. Element, Node...).
-  var objProto = Object.getPrototypeOf({});
-  var arrayProto = Object.getPrototypeOf([]);
-  ObservedSet.prototype = {
-    reset: function() {
-      this.isObserved = !this.isObserved;
-    },
-
-    observe: function(obj) {
-      if (!isObject(obj) || obj === objProto || obj === arrayProto)
-        return;
-      var i = this.arr.indexOf(obj);
-      if (i >= 0 && this.arr[i+1] === this.isObserved)
-        return;
-
-      if (i < 0) {
-        i = this.arr.length;
-        this.arr[i] = obj;
-        Object.observe(obj, this.callback_);
-      }
-
-      this.arr[i+1] = this.isObserved;
-      this.observe(Object.getPrototypeOf(obj));
-    },
-
-    cleanup: function() {
-      var i = 0, j = 0;
-      var isObserved = this.isObserved;
-      while(j < this.arr.length) {
-        var obj = this.arr[j];
-        if (this.arr[j + 1] == isObserved) {
-          if (i < j) {
-            this.arr[i] = obj;
-            this.arr[i + 1] = isObserved;
-          }
-          i += 2;
-        } else {
-          Object.unobserve(obj, this.callback_);
-        }
-        j += 2;
-      }
-
-      this.arr.length = i;
-    }
-  };
-
   function PathObserver(object, path) {
     Observer.call(this);
+
     this.object_ = object;
     this.path_ = path instanceof Path ? path : getPath(path);
-    this.observedSet_ = undefined;
+    this.directObserver_ = undefined;
   }
 
   PathObserver.prototype = createObject({
     __proto__: Observer.prototype,
 
-    getValue: function() {
-      return this.path_.getValueFrom(this.object_);
-    },
-
     connect_: function() {
       if (hasObserve)
-        this.observedSet_ = new ObservedSet(this.boundInternalCallback_);
+        this.directObserver_ = getObservedSet(this, this.object_);
+
+      this.check_(undefined, true);
     },
 
     disconnect_: function() {
-      this.value = undefined;
       this.value_ = undefined;
-      if (this.observedSet_) {
-        this.observedSet_.reset();
-        this.observedSet_.cleanup();
-        this.observedSet_ = undefined;
+
+      if (this.directObserver_) {
+        this.directObserver_.close(this);
+        this.directObserver_ = undefined;
       }
     },
 
-    check_: function() {
-      // Note: Extracting this to a member function for use here and below
-      // regresses dirty-checking path perf by about 25% =-(.
-      if (this.observedSet_)
-        this.observedSet_.reset();
+    iterateObjects_: function(observe) {
+      this.path_.iterateObjects(this.object_, observe);
+    },
 
-      var newValue = this.path_.getValueFrom(this.object_, this.observedSet_);
-
-      if (this.observedSet_)
-        this.observedSet_.cleanup();
-
-      if (areSameValue(this.value_, newValue))
+    check_: function(changeRecords, skipChanges) {
+      var oldValue = this.value_;
+      this.value_ = this.path_.getValueFrom(this.object_);
+      if (skipChanges || areSameValue(this.value_, oldValue))
         return false;
 
-      this.reportArgs_ = [newValue, this.value_];
-      this.value_ = newValue;
+      this.report_([this.value_, oldValue]);
       return true;
-    },
-
-    sync_: function(hard) {
-      if (hard) {
-        if (this.observedSet_)
-          this.observedSet_.reset();
-
-        this.value_ = this.path_.getValueFrom(this.object_, this.observedSet_);
-
-        if (this.observedSet_)
-          this.observedSet_.cleanup();
-      }
     },
 
     setValue: function(newValue) {
@@ -804,138 +927,135 @@ if (typeof WeakMap === 'undefined') {
   function CompoundObserver() {
     Observer.call(this);
 
-    this.observed_ = [];
     this.value_ = [];
-    this.hasObservers_ = false;
-    this.depsChanged_ = undefined;
+    this.directObserver_ = undefined;
+    this.observed_ = [];
   }
 
   var observerSentinel = {};
 
   CompoundObserver.prototype = createObject({
-    __proto__: PathObserver.prototype,
+    __proto__: Observer.prototype,
 
-    getValue: function() {
-      var values = [];
-      this.getValues_(values, true);
-      return values;
+    connect_: function() {
+      this.check_(undefined, true);
+
+      if (!hasObserve)
+        return;
+
+      var object;
+      var needsDirectObserver = false;
+      for (var i = 0; i < this.observed_.length; i += 2) {
+        object = this.observed_[i]
+        if (object !== observerSentinel) {
+          needsDirectObserver = true;
+          break;
+        }
+      }
+
+      if (this.directObserver_) {
+        if (needsDirectObserver) {
+          this.directObserver_.reset();
+          return;
+        }
+        this.directObserver_.close();
+        this.directObserver_ = undefined;
+        return;
+      }
+
+      if (needsDirectObserver)
+        this.directObserver_ = getObservedSet(this, object);
     },
 
-    setValue: function() {
-      console.warn('Set to CompoundObserver ignored.');
+    closeObservers_: function() {
+      for (var i = 0; i < this.observed_.length; i += 2) {
+        if (this.observed_[i] === observerSentinel)
+          this.observed_[i + 1].close();
+      }
+      this.observed_.length = 0;
     },
 
-    // TODO(rafaelw): Consider special-casing when |object| is a PathObserver
-    // and path 'value' to avoid explicit observation.
+    disconnect_: function() {
+      this.value_ = undefined;
+
+      if (this.directObserver_) {
+        this.directObserver_.close(this);
+        this.directObserver_ = undefined;
+      }
+
+      this.closeObservers_();
+    },
+
     addPath: function(object, path) {
-      if (this.state_ != UNOPENED)
+      if (this.state_ != UNOPENED && this.state_ != RESETTING)
         throw Error('Cannot add paths once started.');
 
       this.observed_.push(object, path instanceof Path ? path : getPath(path));
     },
 
     addObserver: function(observer) {
-      if (this.state_ != UNOPENED)
+      if (this.state_ != UNOPENED && this.state_ != RESETTING)
         throw Error('Cannot add observers once started.');
 
-      if (!isObservable(observer))
-        throw Error('Object must be observable');
-
-      this.hasObservers_ = true;
-
-      observer.open(this.observerChanged_, this);
-      var value = observer.value;
-
+      observer.open(this.deliver, this);
       this.observed_.push(observerSentinel, observer);
-      this.value_.push(value);
     },
 
-    deliverDeps_: function() {
-      if (!this.hasObservers_)
-        return;
+    startReset: function() {
+      if (this.state_ != OPENED)
+        throw Error('Can only reset while open');
 
+      this.state_ = RESETTING;
+      this.closeObservers_();
+    },
+
+    finishReset: function() {
+      if (this.state_ != RESETTING)
+        throw Error('Can only finishReset after startReset');
+      this.state_ = OPENED;
+      this.connect_();
+
+      return this.value_;
+    },
+
+    iterateObjects_: function(observe) {
+      var object;
       for (var i = 0; i < this.observed_.length; i += 2) {
-        if (this.observed_[i] === observerSentinel)
-          this.observed_[i + 1].deliver();
+        object = this.observed_[i]
+        if (object !== observerSentinel)
+          this.observed_[i + 1].iterateObjects(object, observe)
       }
     },
 
-    observerChanged_: function() {
-      if (!hasObserve)
-        return this.deliver();
-
-      if (!this.depsChanged_) {
-        this.depsChanged_ = {};
-        Object.observe(this.depsChanged_, this.boundInternalCallback_);
-      }
-
-      this.depsChanged_.changed = !this.depsChanged_.changed;
-    },
-
-    getValues_: function(values, sync) {
-      if (this.observedSet_)
-        this.observedSet_.reset();
-
+    check_: function(changeRecords, skipChanges) {
       var oldValues;
       for (var i = 0; i < this.observed_.length; i += 2) {
         var pathOrObserver = this.observed_[i+1];
         var object = this.observed_[i];
         var value = object === observerSentinel ?
             pathOrObserver.discardChanges() :
-            pathOrObserver.getValueFrom(object, this.observedSet_)
+            pathOrObserver.getValueFrom(object)
 
-        if (sync) {
-          values[i / 2] = value;
+        if (skipChanges) {
+          this.value_[i / 2] = value;
           continue;
         }
 
-        if (areSameValue(value, values[i / 2]))
+        if (areSameValue(value, this.value_[i / 2]))
           continue;
 
         oldValues = oldValues || [];
-        oldValues[i / 2] = values[i / 2];
-        values[i / 2] = value;
+        oldValues[i / 2] = this.value_[i / 2];
+        this.value_[i / 2] = value;
       }
 
-      if (this.observedSet_)
-        this.observedSet_.cleanup();
-
-      return oldValues;
-    },
-
-    check_: function() {
-      var oldValues = this.getValues_(this.value_);
       if (!oldValues)
-        return;
+        return false;
 
       // TODO(rafaelw): Having observed_ as the third callback arg here is
       // pretty lame API. Fix.
-      this.reportArgs_ = [this.value_, oldValues, this.observed_];
+      this.report_([this.value_, oldValues, this.observed_]);
       return true;
-    },
-
-    sync_: function(hard) {
-      if (hard)
-        this.getValues_(this.value_, true);
-    },
-
-    close: function() {
-      if (this.hasObservers_) {
-        for (var i = 0; i < this.observed_.length; i += 2) {
-          if (this.observed_[i] === observerSentinel)
-            this.observed_[i + 1].close();
-        }
-
-        this.observed_ = undefined;
-        this.value_ = undefined;
-      }
-
-      if (this.depsChanged_) {
-        Object.unobserve(this.depsChanged_, this.boundInternalCallback_);
-        this.depsChanged_ = undefined;
-      }
-
-      Observer.prototype.close.call(this);
     }
   });
 
@@ -970,10 +1090,6 @@ if (typeof WeakMap === 'undefined') {
       var oldValue = this.value_;
       this.value_ = value;
       this.callback_.call(this.target_, this.value_, oldValue);
-    },
-
-    getValue: function() {
-      return this.getValueFn_(this.observable_.getValue());
     },
 
     discardChanges: function() {
@@ -1025,16 +1141,18 @@ if (typeof WeakMap === 'undefined') {
     }
   }
 
-  Observer.defineProperty = function(target, name, observable) {
+  Observer.defineComputedProperty = function(target, name, observable) {
     var notify = notifyFunction(target, name);
-    observable.open(function(newValue, oldValue) {
+    var value = observable.open(function(newValue, oldValue) {
+      value = newValue;
       if (notify)
         notify(PROP_UPDATE_TYPE, oldValue);
     });
 
     Object.defineProperty(target, name, {
       get: function() {
-        return observable.getValue();
+        observable.deliver();
+        return value;
       },
       set: function(newValue) {
         observable.setValue(newValue);
@@ -1045,10 +1163,9 @@ if (typeof WeakMap === 'undefined') {
 
     return {
       close: function() {
-        var lastValue = observable.getValue();
         observable.close();
         Object.defineProperty(target, name, {
-          value: lastValue,
+          value: value,
           writable: true,
           configurable: true
         });
@@ -1512,8 +1629,8 @@ if (typeof WeakMap === 'undefined') {
   }
 
   global.Observer = Observer;
+  global.Observer.runEOM_ = runEOM;
   global.Observer.hasObjectObserve = hasObserve;
-  global.Observer.isObservable = isObservable;
   global.ArrayObserver = ArrayObserver;
   global.ArrayObserver.calculateSplices = function(current, previous) {
     return arraySplice.calculateSplices(current, previous);
@@ -1535,7 +1652,7 @@ if (typeof WeakMap === 'undefined') {
     'delete': PROP_DELETE_TYPE,
     splice: ARRAY_SPLICE_TYPE
   };
-})(typeof global !== 'undefined' && global ? global : this || window);
+})(typeof global !== 'undefined' && global && typeof module !== 'undefined' && module ? global : this || window);
 
 // prepoulate window.Platform.flags for default controls
 window.Platform = window.Platform || {};
@@ -6735,6 +6852,8 @@ window.ShadowDOMPolyfill = {};
 */
 (function(scope) {
 
+var loader = scope.loader;
+
 var ShadowCSS = {
   strictStyling: false,
   registry: {},
@@ -7190,12 +7309,15 @@ if (window.ShadowDOMPolyfill) {
         var style = elt;
         if (!elt.hasAttribute('nopolyfill')) {
           if (elt.__resource) {
-            style = doc.createElement('style');
-            style.textContent = elt.__resource;
+            style = elt.ownerDocument.createElement('style');
+            style.textContent = Platform.loader.resolveUrlsInCssText(
+                elt.__resource, elt.href);
             // remove links from main document
             if (elt.ownerDocument === doc) {
               elt.parentNode.removeChild(elt);
             }
+          } else {
+            Platform.loader.resolveUrlsInStyle(style);  
           }
           var styles = [style];
           style.textContent = ShadowCSS.stylesToShimmedCssText(styles, styles);
@@ -8108,7 +8230,7 @@ function whenImportsReady(callback, doc) {
     })
     return;
   }
-  var imports = doc.querySelectorAll('link[rel=import');
+  var imports = doc.querySelectorAll('link[rel=import]');
   var loaded = 0, l = imports.length;
   function checkDone(d) { 
     if (loaded == l) {
@@ -8285,27 +8407,34 @@ var importParser = {
 // NOTE: styles are the only elements that require direct path fixup.
 function cloneStyle(style) {
   var clone = style.ownerDocument.createElement('style');
-  clone.textContent = relativeCssForStyle(style);
+  clone.textContent = style.textContent;
+  path.resolveUrlsInStyle(clone);
   return clone;
-}
-
-function relativeCssForStyle(style) {
-  var doc = style.ownerDocument;
-  var resolver = doc.createElement('a');
-  var cssText = replaceUrlsInCssText(style.textContent, resolver,
-      CSS_URL_REGEXP);
-  return replaceUrlsInCssText(cssText, resolver, CSS_IMPORT_REGEXP);  
 }
 
 var CSS_URL_REGEXP = /(url\()([^)]*)(\))/g;
 var CSS_IMPORT_REGEXP = /(@import[\s]*)([^;]*)(;)/g;
-function replaceUrlsInCssText(cssText, resolver, regexp) {
-  return cssText.replace(regexp, function(m, pre, url, post) {
-    var urlPath = url.replace(/["']/g, '');
-    resolver.href = urlPath;
-    urlPath = resolver.href;
-    return pre + '\'' + urlPath + '\'' + post;
-  });
+
+var path = {
+  resolveUrlsInStyle: function(style) {
+    var doc = style.ownerDocument;
+    var resolver = doc.createElement('a');
+    style.textContent = this.resolveUrlsInCssText(style.textContent, resolver);
+    return style;  
+  },
+  resolveUrlsInCssText: function(cssText, urlObj) {
+    var r = this.replaceUrls(cssText, urlObj, CSS_URL_REGEXP);
+    r = this.replaceUrls(r, urlObj, CSS_IMPORT_REGEXP);
+    return r;
+  },
+  replaceUrls: function(text, urlObj, regexp) {
+    return text.replace(regexp, function(m, pre, url, post) {
+      var urlPath = url.replace(/["']/g, '');
+      urlObj.href = urlPath;
+      urlPath = urlObj.href;
+      return pre + '\'' + urlPath + '\'' + post;
+    });    
+  }
 }
 
 function LoadTracker(doc, callback) {
@@ -8373,6 +8502,7 @@ function inMainDocument(elt) {
 // exports
 
 scope.parser = importParser;
+scope.path = path;
 
 })(HTMLImports);
 /*
@@ -8977,10 +9107,6 @@ HTMLImports.whenImportsReady(function() {
   };
 
   global.JsMutationObserver = JsMutationObserver;
-
-  // Provide unprefixed MutationObserver with native or JS implementation
-  if (!global.MutationObserver && global.WebKitMutationObserver)
-    global.MutationObserver = global.WebKitMutationObserver;
 
   if (!global.MutationObserver)
     global.MutationObserver = JsMutationObserver;
@@ -10010,6 +10136,35 @@ function createStyleElement(cssText, scope) {
   return style;
 }
 
+// TODO(sorvell): integrate a real URL polyfill, this is cribbed from
+// https://github.com/arv/DOM-URL-Polyfill/blob/master/src/url.js.
+// NOTE: URL seems difficult to polyfill since chrome and safari implement
+// it but only chrome's appears to work.
+function getUrl(base, url) {
+  url = url || ''
+  var doc = document.implementation.createHTMLDocument('');
+  if (base) {
+    var baseElement = doc.createElement('base');
+    baseElement.href = base;
+    doc.head.appendChild(baseElement);
+  }
+  var anchorElement = doc.createElement('a');
+  anchorElement.href = url;
+  doc.body.appendChild(anchorElement);
+  return anchorElement;
+}
+
+// TODO(sorvell): factor path fixup for easier reuse; parts are currently
+// needed by HTMLImports and ShadowDOM style shimming.
+function resolveUrlsInCssText(cssText, url) {
+  return HTMLImports.path.resolveUrlsInCssText(cssText,
+      getUrl(url));
+}
+
+function resolveUrlsInStyle(style) {
+  return HTMLImports.path.resolveUrlsInStyle(style);
+}
+
 // TODO(sorvell): use a common loader shared with HTMLImports polyfill
 // currently, this just loads the first @import per style element 
 // and does not recurse into loaded elements; we'll address this with a 
@@ -10019,6 +10174,7 @@ function polyfillLoadStyle(style, callback) {
   HTMLImports.xhr.load(atImportUrlFromStyle(style), function (err, resource,
       url) {
     replaceAtImportWithCssText(this, url, resource);
+    this.textContent = resolveUrlsInCssText(this.textContent, url);
     callback && callback(this);
   }, style);
 }
@@ -10036,6 +10192,9 @@ function replaceAtImportWithCssText(style, url, cssText) {
   style.textContent = style.textContent.replace(re, cssText);
 }
 
+// exports
+loader.resolveUrlsInCssText = resolveUrlsInCssText;
+loader.resolveUrlsInStyle = resolveUrlsInStyle;
 scope.loader = loader;
 
 })(window.Platform);
