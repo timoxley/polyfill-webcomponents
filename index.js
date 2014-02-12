@@ -351,7 +351,6 @@ if (typeof WeakMap === 'undefined') {
     var added = {};
     var removed = {};
     var changed = {};
-    var oldObjectHas = {};
 
     for (var prop in oldObject) {
       var newValue = object[prop];
@@ -1667,24 +1666,49 @@ window.logFlags = window.logFlags || {};
     o = o.split('=');
     o[0] && (flags[o[0]] = o[1] || true);
   });
+  var entryPoint = document.currentScript || document.querySelector('script[src*="platform.js"]');
+  if (entryPoint) {
+    var a = entryPoint.attributes;
+    for (var i = 0, n; i < a.length; i++) {
+      n = a[i];
+      if (n.name !== 'src') {
+        flags[n.name] = n.value || true;
+      }
+    }
+  }
+  if (flags.log) {
+    flags.log.split(',').forEach(function(f) {
+      window.logFlags[f] = true;
+    });
+  }
   // If any of these flags match 'native', then force native ShadowDOM; any
   // other truthy value, or failure to detect native
-  // ShadowDOM, results in polyfill 
+  // ShadowDOM, results in polyfill
   flags.shadow = (flags.shadow || flags.shadowdom || flags.polyfill);
   if (flags.shadow === 'native') {
     flags.shadow = false;
   } else {
-    flags.shadow = flags.shadow || !HTMLElement.prototype.createShadowRoot
-        && 'polyfill';
+    flags.shadow = flags.shadow || !HTMLElement.prototype.createShadowRoot;
   }
 
+  // CustomElements polyfill flag
+  if (flags.register) {
+    window.CustomElements = window.CustomElements || {flags: {}};
+    window.CustomElements.flags.register = flags.register;
+  }
 
+  if (flags.imports) {
+    window.HTMLImports = window.HTMLImports || {flags: {}};
+    window.HTMLImports.flags.imports = flags.imports;
+  }
 
   // export
   scope.flags = flags;
 })(Platform);
+
 // select ShadowDOM impl
-if (Platform.flags.shadow === 'polyfill') {
+if (Platform.flags.shadow) {
+
 // Copyright 2012 The Polymer Authors. All rights reserved.
 // Use of this source code is goverened by a BSD-style
 // license that can be found in the LICENSE file.
@@ -3377,6 +3401,7 @@ window.ShadowDOMPolyfill = {};
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
   var wrapIfNeeded = scope.wrapIfNeeded;
+  var wrappers = scope.wrappers;
 
   function assertIsNodeWrapper(node) {
     assert(node instanceof Node);
@@ -3588,6 +3613,41 @@ window.ShadowDOMPolyfill = {};
     return p && p.invalidateShadowRenderer();
   }
 
+  function cleanupNodes(nodes) {
+    for (var i = 0, n; i < nodes.length; i++) {
+      n = nodes[i];
+      n.parentNode.removeChild(n);
+    }
+  }
+
+  var originalImportNode = document.importNode;
+  var originalCloneNode = window.Node.prototype.cloneNode;
+
+  function cloneNode(node, deep, opt_doc) {
+    var clone;
+    if (opt_doc)
+      clone = wrap(originalImportNode.call(opt_doc, node.impl, false));
+    else
+      clone = wrap(originalCloneNode.call(node.impl, false));
+
+    if (deep) {
+      for (var child = node.firstChild; child; child = child.nextSibling) {
+        clone.appendChild(cloneNode(child, true, opt_doc));
+      }
+
+      if (node instanceof wrappers.HTMLTemplateElement) {
+        var cloneContent = clone.content;
+        for (var child = node.content.firstChild;
+             child;
+             child = child.nextSibling) {
+         cloneContent.appendChild(cloneNode(child, true, opt_doc));
+        }
+      }
+    }
+    // TODO(arv): Some HTML elements also clone other data like value.
+    return clone;
+  }
+
   var OriginalNode = window.Node;
 
   /**
@@ -3634,7 +3694,7 @@ window.ShadowDOMPolyfill = {};
      * @private
      */
     this.previousSibling_ = undefined;
-  };
+  }
 
   var OriginalDocumentFragment = window.DocumentFragment;
   var originalAppendChild = OriginalNode.prototype.appendChild;
@@ -3960,14 +4020,7 @@ window.ShadowDOMPolyfill = {};
     },
 
     cloneNode: function(deep) {
-      var clone = wrap(this.impl.cloneNode(false));
-      if (deep) {
-        for (var child = this.firstChild; child; child = child.nextSibling) {
-          clone.appendChild(child.cloneNode(true));
-        }
-      }
-      // TODO(arv): Some HTML elements also clone other data like value.
-      return clone;
+      return cloneNode(this, deep);
     },
 
     contains: function(child) {
@@ -3989,6 +4042,43 @@ window.ShadowDOMPolyfill = {};
       // This only wraps, it therefore only operates on the composed DOM and not
       // the logical DOM.
       return originalCompareDocumentPosition.call(this.impl, unwrap(otherNode));
+    },
+
+    normalize: function() {
+      var nodes = snapshotNodeList(this.childNodes);
+      var remNodes = [];
+      var s = '';
+      var modNode;
+
+      for (var i = 0, n; i < nodes.length; i++) {
+        n = nodes[i];
+        if (n.nodeType === Node.TEXT_NODE) {
+          if (!modNode && !n.data.length)
+            this.removeNode(n);
+          else if (!modNode)
+            modNode = n;
+          else {
+            s += n.data;
+            remNodes.push(n);
+          }
+        } else {
+          if (modNode && remNodes.length) {
+            modNode.data += s;
+            cleanUpNodes(remNodes);
+          }
+          remNodes = [];
+          s = '';
+          modNode = null;
+          if (n.childNodes.length)
+            n.normalize();
+        }
+      }
+
+      // handle case where >1 text nodes are the last children
+      if (modNode && remNodes.length) {
+        modNode.data += s;
+        cleanupNodes(remNodes);
+      }
     }
   });
 
@@ -4008,6 +4098,7 @@ window.ShadowDOMPolyfill = {};
   scope.nodesWereRemoved = nodesWereRemoved;
   scope.snapshotNodeList = snapshotNodeList;
   scope.wrappers.Node = Node;
+  scope.cloneNode = cloneNode;
 
 })(window.ShadowDOMPolyfill);
 
@@ -4404,6 +4495,7 @@ window.ShadowDOMPolyfill = {};
   var snapshotNodeList = scope.snapshotNodeList;
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
+  var wrappers = scope.wrappers;
 
   /////////////////////////////////////////////////////////////////////////////
   // innerHTML and outerHTML
@@ -4505,6 +4597,9 @@ window.ShadowDOMPolyfill = {};
   }
 
   function getInnerHTML(node) {
+    if (node instanceof wrappers.HTMLTemplateElement)
+      node = node.content;
+
     var s = '';
     for (var child = node.firstChild; child; child = child.nextSibling) {
       s += getOuterHTML(child, node);
@@ -4523,7 +4618,11 @@ window.ShadowDOMPolyfill = {};
     }
   }
 
+  // IE11 does not have MSIE in the user agent string.
+  var oldIe = /MSIE/.test(navigator.userAgent);
+
   var OriginalHTMLElement = window.HTMLElement;
+  var OriginalHTMLTemplateElement = window.HTMLTemplateElement;
 
   function HTMLElement(node) {
     Element.call(this, node);
@@ -4531,17 +4630,38 @@ window.ShadowDOMPolyfill = {};
   HTMLElement.prototype = Object.create(Element.prototype);
   mixin(HTMLElement.prototype, {
     get innerHTML() {
-      // TODO(arv): This should fallback to this.impl.innerHTML if there
-      // are no shadow trees below or above the context node.
       return getInnerHTML(this);
     },
     set innerHTML(value) {
+      // IE9 does not handle set innerHTML correctly on plaintextParents. It
+      // creates element children. For example
+      //
+      //   scriptElement.innerHTML = '<a>test</a>'
+      //
+      // Creates a single HTMLAnchorElement child.
+      if (oldIe && plaintextParents[this.localName]) {
+        this.textContent = value;
+        return;
+      }
+
       var removedNodes = snapshotNodeList(this.childNodes);
 
-      if (this.invalidateShadowRenderer())
-        setInnerHTML(this, value, this.tagName);
-      else
+      if (this.invalidateShadowRenderer()) {
+        if (this instanceof wrappers.HTMLTemplateElement)
+          setInnerHTML(this.content, value);
+        else
+          setInnerHTML(this, value, this.tagName);
+
+      // If we have a non native template element we need to handle this
+      // manually since setting impl.innerHTML would add the html as direct
+      // children and not be moved over to the content fragment.
+      } else if (!OriginalHTMLTemplateElement &&
+                 this instanceof wrappers.HTMLTemplateElement) {
+        setInnerHTML(this.content, value);
+      } else {
         this.impl.innerHTML = value;
+      }
+
       var addedNodes = snapshotNodeList(this.childNodes);
 
       enqueueMutation(this, 'childList', {
@@ -4827,10 +4947,8 @@ window.ShadowDOMPolyfill = {};
   'use strict';
 
   var HTMLElement = scope.wrappers.HTMLElement;
-  var getInnerHTML = scope.getInnerHTML;
   var mixin = scope.mixin;
   var registerWrapper = scope.registerWrapper;
-  var setInnerHTML = scope.setInnerHTML;
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
 
@@ -4882,13 +5000,6 @@ window.ShadowDOMPolyfill = {};
         return wrap(this.impl.content);
       return contentTable.get(this);
     },
-
-    get innerHTML() {
-      return getInnerHTML(this.content);
-    },
-    set innerHTML(value) {
-      setInnerHTML(this.content, value);
-    }
 
     // TODO(arv): cloneNode needs to clone content.
 
@@ -5363,6 +5474,9 @@ window.ShadowDOMPolyfill = {};
     },
     intersectsNode: function(node) {
       return this.impl.intersectsNode(unwrapIfNeeded(node));
+    },
+    toString: function() {
+      return this.impl.toString();
     }
   };
 
@@ -5666,10 +5780,18 @@ window.ShadowDOMPolyfill = {};
     if (!(node instanceof Element))
       return false;
 
+    // The native matches function in IE9 does not correctly work with elements
+    // that are not in the document.
+    // TODO(arv): Implement matching in JS.
+    // https://github.com/Polymer/ShadowDOM/issues/361
+    if (select === '*' || select === node.localName)
+      return true;
+
     // TODO(arv): This does not seem right. Need to check for a simple selector.
     if (!selectorMatchRegExp.test(select))
       return false;
 
+    // TODO(arv): This no longer matches the spec.
     if (select[0] === ':' && !allowedPseudoRegExp.test(select))
       return false;
 
@@ -6186,6 +6308,74 @@ window.ShadowDOMPolyfill = {};
 
 })(window.ShadowDOMPolyfill);
 
+// Copyright 2014 The Polymer Authors. All rights reserved.
+// Use of this source code is goverened by a BSD-style
+// license that can be found in the LICENSE file.
+
+(function(scope) {
+  'use strict';
+
+  var registerWrapper = scope.registerWrapper;
+  var unwrap = scope.unwrap;
+  var unwrapIfNeeded = scope.unwrapIfNeeded;
+  var wrap = scope.wrap;
+
+  var OriginalSelection = window.Selection;
+
+  function Selection(impl) {
+    this.impl = impl;
+  }
+  Selection.prototype = {
+    get anchorNode() {
+      return wrap(this.impl.anchorNode);
+    },
+    get focusNode() {
+      return wrap(this.impl.focusNode);
+    },
+    addRange: function(range) {
+      this.impl.addRange(unwrap(range));
+    },
+    collapse: function(node, index) {
+      this.impl.collapse(unwrapIfNeeded(node), index);
+    },
+    containsNode: function(node, allowPartial) {
+      return this.impl.containsNode(unwrapIfNeeded(node), allowPartial);
+    },
+    extend: function(node, offset) {
+      this.impl.extend(unwrapIfNeeded(node), offset);
+    },
+    getRangeAt: function(index) {
+      return wrap(this.impl.getRangeAt(index));
+    },
+    removeRange: function(range) {
+      this.impl.removeRange(unwrap(range));
+    },
+    selectAllChildren: function(node) {
+      this.impl.selectAllChildren(unwrapIfNeeded(node));
+    },
+    toString: function() {
+      return this.impl.toString();
+    }
+  };
+
+  // WebKit extensions. Not implemented.
+  // readonly attribute Node baseNode;
+  // readonly attribute long baseOffset;
+  // readonly attribute Node extentNode;
+  // readonly attribute long extentOffset;
+  // [RaisesException] void setBaseAndExtent([Default=Undefined] optional Node baseNode,
+  //                       [Default=Undefined] optional long baseOffset,
+  //                       [Default=Undefined] optional Node extentNode,
+  //                       [Default=Undefined] optional long extentOffset);
+  // [RaisesException, ImplementedAs=collapse] void setPosition([Default=Undefined] optional Node node,
+  //                  [Default=Undefined] optional long offset);
+
+  registerWrapper(window.Selection, Selection, window.getSelection());
+
+  scope.wrappers.Selection = Selection;
+
+})(window.ShadowDOMPolyfill);
+
 // Copyright 2013 The Polymer Authors. All rights reserved.
 // Use of this source code is goverened by a BSD-style
 // license that can be found in the LICENSE file.
@@ -6196,17 +6386,20 @@ window.ShadowDOMPolyfill = {};
   var GetElementsByInterface = scope.GetElementsByInterface;
   var Node = scope.wrappers.Node;
   var ParentNodeInterface = scope.ParentNodeInterface;
+  var Selection = scope.wrappers.Selection;
   var SelectorsInterface = scope.SelectorsInterface;
   var ShadowRoot = scope.wrappers.ShadowRoot;
+  var cloneNode = scope.cloneNode;
   var defineWrapGetter = scope.defineWrapGetter;
   var elementFromPoint = scope.elementFromPoint;
   var forwardMethodsToWrapper = scope.forwardMethodsToWrapper;
   var matchesNames = scope.matchesNames;
   var mixin = scope.mixin;
   var registerWrapper = scope.registerWrapper;
+  var renderAllPending = scope.renderAllPending;
+  var rewrap = scope.rewrap;
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
-  var rewrap = scope.rewrap;
   var wrapEventTargetMethods = scope.wrapEventTargetMethods;
   var wrapNodeList = scope.wrapNodeList;
 
@@ -6243,7 +6436,7 @@ window.ShadowDOMPolyfill = {};
     'createEventNS',
     'createRange',
     'createTextNode',
-    'getElementById',
+    'getElementById'
   ].forEach(wrapMethod);
 
   var originalAdoptNode = document.adoptNode;
@@ -6269,7 +6462,7 @@ window.ShadowDOMPolyfill = {};
       doc.adoptNode(oldShadowRoot);
   }
 
-  var originalImportNode = document.importNode;
+  var originalGetSelection = document.getSelection;
 
   mixin(Document.prototype, {
     adoptNode: function(node) {
@@ -6282,15 +6475,11 @@ window.ShadowDOMPolyfill = {};
       return elementFromPoint(this, this, x, y);
     },
     importNode: function(node, deep) {
-      // We need to manually walk the tree to ensure we do not include rendered
-      // shadow trees.
-      var clone = wrap(originalImportNode.call(this.impl, unwrap(node), false));
-      if (deep) {
-        for (var child = node.firstChild; child; child = child.nextSibling) {
-          clone.appendChild(this.importNode(child, true));
-        }
-      }
-      return clone;
+      return cloneNode(node, deep, this.impl);
+    },
+    getSelection: function() {
+      renderAllPending();
+      return new Selection(originalGetSelection.call(unwrap(this)));
     }
   });
 
@@ -6427,6 +6616,7 @@ window.ShadowDOMPolyfill = {};
     'createTextNode',
     'elementFromPoint',
     'getElementById',
+    'getSelection',
   ]);
 
   mixin(Document.prototype, GetElementsByInterface);
@@ -6507,29 +6697,34 @@ window.ShadowDOMPolyfill = {};
   'use strict';
 
   var EventTarget = scope.wrappers.EventTarget;
+  var Selection = scope.wrappers.Selection;
   var mixin = scope.mixin;
   var registerWrapper = scope.registerWrapper;
+  var renderAllPending = scope.renderAllPending;
   var unwrap = scope.unwrap;
   var unwrapIfNeeded = scope.unwrapIfNeeded;
   var wrap = scope.wrap;
-  var renderAllPending = scope.renderAllPending;
 
   var OriginalWindow = window.Window;
+  var originalGetComputedStyle = window.getComputedStyle;
+  var originalGetSelection = window.getSelection;
 
   function Window(impl) {
     EventTarget.call(this, impl);
   }
   Window.prototype = Object.create(EventTarget.prototype);
 
-  var originalGetComputedStyle = window.getComputedStyle;
   OriginalWindow.prototype.getComputedStyle = function(el, pseudo) {
-    renderAllPending();
-    return originalGetComputedStyle.call(this || window, unwrapIfNeeded(el),
-                                         pseudo);
+    return wrap(this || window).getComputedStyle(unwrapIfNeeded(el), pseudo);
+  };
+
+  OriginalWindow.prototype.getSelection = function() {
+    return wrap(this || window).getSelection();
   };
 
   // Work around for https://bugzilla.mozilla.org/show_bug.cgi?id=943065
   delete window.getComputedStyle;
+  delete window.getSelection;
 
   ['addEventListener', 'removeEventListener', 'dispatchEvent'].forEach(
       function(name) {
@@ -6544,9 +6739,14 @@ window.ShadowDOMPolyfill = {};
 
   mixin(Window.prototype, {
     getComputedStyle: function(el, pseudo) {
+      renderAllPending();
       return originalGetComputedStyle.call(unwrap(this), unwrapIfNeeded(el),
                                            pseudo);
-    }
+    },
+    getSelection: function() {
+      renderAllPending();
+      return new Selection(originalGetSelection.call(unwrap(this)));
+    },
   });
 
   registerWrapper(OriginalWindow, Window);
@@ -6723,13 +6923,13 @@ window.ShadowDOMPolyfill = {};
 
   Shimmed features:
 
-  * @host: ShadowDOM allows styling of the shadowRoot's host element using the 
-  @host rule. To shim this feature, the @host styles are reformatted and 
-  prefixed with a given scope name and promoted to a document level stylesheet.
+  * :host, :ancestor: ShadowDOM allows styling of the shadowRoot's host
+  element using the :host rule. To shim this feature, the :host styles are 
+  reformatted and prefixed with a given scope name and promoted to a 
+  document level stylesheet.
   For example, given a scope name of .foo, a rule like this:
   
-    @host {
-      * {
+    :host {
         background: red;
       }
     }
@@ -6781,34 +6981,6 @@ window.ShadowDOMPolyfill = {};
   Note that elements that are dynamically added to a scope must have the scope
   selector added to them manually.
 
-  * ::pseudo: These rules are converted to rules that take advantage of the
-  pseudo attribute. For example, a shadowRoot like this inside an x-foo
-
-    <div pseudo="x-special">Special</div>
-
-  with a rule like this:
-
-    x-foo::x-special { ... }
-
-  becomes:
-
-    x-foo [pseudo=x-special] { ... }
-
-  * ::part(): These rules are converted to rules that take advantage of the
-  part attribute. For example, a shadowRoot like this inside an x-foo
-
-    <div part="special">Special</div>
-
-  with a rule like this:
-
-    x-foo::part(special) { ... }
-
-  becomes:
-
-    x-foo [part=special] { ... }    
-  
-  Unaddressed ShadowDOM styling features:
-  
   * upper/lower bound encapsulation: Styles which are defined outside a
   shadowRoot should not cross the ShadowDOM boundary and should not apply
   inside a shadowRoot.
@@ -6828,7 +7000,7 @@ window.ShadowDOMPolyfill = {};
   via descendent selectors. For example, with a shadowRoot like this:
   
     <style>
-      content::-webkit-distributed(div) {
+      ::content(div) {
         background: red;
       }
     </style>
@@ -6838,7 +7010,7 @@ window.ShadowDOMPolyfill = {};
   
     <style>
       / *@polyfill .content-container div * / 
-      content::-webkit-distributed(div) {
+      ::content(div) {
         background: red;
       }
     </style>
@@ -6852,8 +7024,6 @@ window.ShadowDOMPolyfill = {};
 */
 (function(scope) {
 
-var loader = scope.loader;
-
 var ShadowCSS = {
   strictStyling: false,
   registry: {},
@@ -6861,7 +7031,7 @@ var ShadowCSS = {
   // 1. cache root styles by name
   // 2. optionally tag root nodes with scope name
   // 3. shim polyfill directives /* @polyfill */ and /* @polyfill-rule */
-  // 4. shim @host and scoping
+  // 4. shim :host and scoping
   shimStyling: function(root, name, extendsName) {
     var typeExtension = this.isTypeExtension(extendsName);
     // use caching to make working with styles nodes easier and to facilitate
@@ -6886,7 +7056,7 @@ var ShadowCSS = {
     // add style to document
     addCssToDocument(cssText);
   },
-  // apply @polyfill rules + @host and scope shimming
+  // apply @polyfill rules + :host and scope shimming
   stylesToShimmedCssText: function(rootStyles, scopeStyles, name,
       typeExtension) {
     name = name || '';
@@ -6894,11 +7064,10 @@ var ShadowCSS = {
     // scoping process takes care of shimming these
     this.insertPolyfillDirectives(rootStyles);
     this.insertPolyfillRules(rootStyles);
-    var cssText = this.shimAtHost(scopeStyles, name, typeExtension) +
-        this.shimScoping(scopeStyles, name, typeExtension);
+    var cssText = this.shimScoping(scopeStyles, name, typeExtension);
     // note: we only need to do rootStyles since these are unscoped.
     cssText += this.extractPolyfillUnscopedRules(rootStyles);
-    return cssText;
+    return cssText.trim();
   },
   registerDefinition: function(root, name, extendsName) {
     var def = this.registry[name] = {
@@ -7018,57 +7187,6 @@ var ShadowCSS = {
     }
     return r;
   },
-  // form: @host { .foo { declarations } }
-  // becomes: scopeName.foo { declarations }
-  shimAtHost: function(styles, name, typeExtension) {
-    if (styles) {
-      return this.convertAtHostStyles(styles, name, typeExtension);
-    }
-  },
-  convertAtHostStyles: function(styles, name, typeExtension) {
-    var cssText = stylesToCssText(styles), self = this;
-    cssText = cssText.replace(hostRuleRe, function(m, p1) {
-      return self.scopeHostCss(p1, name, typeExtension);
-    });
-    cssText = rulesToCss(this.findAtHostRules(cssToRules(cssText),
-        this.makeScopeMatcher(name, typeExtension)));
-    return cssText;
-  },
-  scopeHostCss: function(cssText, name, typeExtension) {
-    var self = this;
-    return cssText.replace(selectorRe, function(m, p1, p2) {
-      return self.scopeHostSelector(p1, name, typeExtension) + ' ' + p2 + '\n\t';
-    });
-  },
-  // supports scopig by name and  [is=name] syntax
-  scopeHostSelector: function(selector, name, typeExtension) {
-    var r = [], parts = selector.split(','), is = '[is=' + name + ']';
-    parts.forEach(function(p) {
-      p = p.trim();
-      // selector: *|:scope -> name
-      if (p.match(hostElementRe)) {
-        p = p.replace(hostElementRe, typeExtension ? is + '$1$3' :
-            name + '$1$3');
-      // selector: .foo -> name.foo (OR) [bar] -> name[bar]
-      } else if (p.match(hostFixableRe)) {
-        p = typeExtension ? is + p : name + p;
-      }
-      r.push(p);
-    }, this);
-    return r.join(', ');
-  },
-  // consider styles that do not include component name in the selector to be
-  // unscoped and in need of promotion; 
-  // for convenience, also consider keyframe rules this way.
-  findAtHostRules: function(cssRules, matcher) {
-    return Array.prototype.filter.call(cssRules, 
-      this.isHostRule.bind(this, matcher));
-  },
-  isHostRule: function(matcher, cssRule) {
-    return (cssRule.selectorText && cssRule.selectorText.match(matcher)) ||
-      (cssRule.cssRules && this.findAtHostRules(cssRule.cssRules, matcher).length) ||
-      (cssRule.type == CSSRule.WEBKIT_KEYFRAMES_RULE);
-  },
   /* Ensure styles are scoped. Pseudo-scoping takes a rule like:
    * 
    *  .foo {... } 
@@ -7083,26 +7201,30 @@ var ShadowCSS = {
     }
   },
   convertScopedStyles: function(styles, name, typeExtension) {
-    var cssText = stylesToCssText(styles).replace(hostRuleRe, '');
+    var cssText = stylesToCssText(styles);
     cssText = this.insertPolyfillHostInCssText(cssText);
     cssText = this.convertColonHost(cssText);
-    cssText = this.convertPseudos(cssText);
-    cssText = this.convertParts(cssText);
+    cssText = this.convertColonAncestor(cssText);
     cssText = this.convertCombinators(cssText);
-    var rules = cssToRules(cssText);
     if (name) {
+      var rules = cssToRules(cssText);
       cssText = this.scopeRules(rules, name, typeExtension);
     }
     return cssText;
   },
-  convertPseudos: function(cssText) {
-    return cssText.replace(cssPseudoRe, ' [pseudo=$1]');
-  },
-  convertParts: function(cssText) {
-    return cssText.replace(cssPartRe, ' [part=$1]');
-  },
   /*
    * convert a rule like :host(.foo) > .bar { }
+   *
+   * to
+   *
+   * scopeName.foo > .bar
+  */
+  convertColonHost: function(cssText) {
+    return this.convertColonRule(cssText, cssColonHostRe,
+        this.colonHostPartReplacer);
+  },
+  /*
+   * convert a rule like :ancestor(.foo) > .bar { }
    *
    * to
    *
@@ -7110,31 +7232,41 @@ var ShadowCSS = {
    * 
    * and
    *
-   * :host(.foo:host) .bar { ... }
+   * :ancestor(.foo:host) .bar { ... }
    * 
    * to
    * 
    * scopeName.foo .bar { ... }
   */
-  convertColonHost: function(cssText) {
+  convertColonAncestor: function(cssText) {
+    return this.convertColonRule(cssText, cssColonAncestorRe,
+        this.colonAncestorPartReplacer);
+  },
+  convertColonRule: function(cssText, regExp, partReplacer) {
     // p1 = :host, p2 = contents of (), p3 rest of rule
-    return cssText.replace(cssColonHostRe, function(m, p1, p2, p3) {
+    return cssText.replace(regExp, function(m, p1, p2, p3) {
       p1 = polyfillHostNoCombinator;
       if (p2) {
         var parts = p2.split(','), r = [];
         for (var i=0, l=parts.length, p; (i<l) && (p=parts[i]); i++) {
           p = p.trim();
-          if (p.match(polyfillHost)) {
-            r.push(p1 + p.replace(polyfillHost, '') + p3);
-          } else {
-            r.push(p1 + p + p3 + ', ' + p + ' ' + p1 + p3);
-          }
+          r.push(partReplacer(p1, p, p3));
         }
         return r.join(',');
       } else {
         return p1 + p3;
       }
     });
+  },
+  colonAncestorPartReplacer: function(host, part, suffix) {
+    if (part.match(polyfillHost)) {
+      return this.colonHostPartReplacer(host, part, suffix);
+    } else {
+      return host + part + suffix + ', ' + part + ' ' + host + suffix;
+    }
+  },
+  colonHostPartReplacer: function(host, part, suffix) {
+    return host + part.replace(polyfillHost, '') + suffix;
   },
   /*
    * Convert ^ and ^^ combinators by replacing with space.
@@ -7212,17 +7344,20 @@ var ShadowCSS = {
   },
   insertPolyfillHostInCssText: function(selector) {
     return selector.replace(hostRe, polyfillHost).replace(colonHostRe,
-        polyfillHost);
+        polyfillHost).replace(colonAncestorRe, polyfillAncestor);
   },
   propertiesFromRule: function(rule) {
+    // TODO(sorvell): Safari cssom incorrectly removes quotes from the content
+    // property. (https://bugs.webkit.org/show_bug.cgi?id=118045)
+    if (rule.style.content && !rule.style.content.match(/['"]+/)) {
+      return rule.style.cssText.replace(/content:[^;]*;/g, 'content: \'' + 
+          rule.style.content + '\';');
+    }
     return rule.style.cssText;
   }
 };
 
-var hostRuleRe = /@host[^{]*{(([^}]*?{[^{]*?}[\s\S]*?)+)}/gim,
-    selectorRe = /([^{]*)({[\s\S]*?})/gim,
-    hostElementRe = /(.*)((?:\*)|(?:\:scope))(.*)/,
-    hostFixableRe = /^[.\[:]/,
+var selectorRe = /([^{]*)({[\s\S]*?})/gim,
     cssCommentRe = /\/\*[^*]*\*+([^/*][^*]*\*+)*\//gim,
     cssPolyfillCommentRe = /\/\*\s*@polyfill ([^*]*\*+([^/*][^*]*\*+)*\/)([^{]*?){/gim,
     cssPolyfillRuleCommentRe = /\/\*\s@polyfill-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
@@ -7231,16 +7366,21 @@ var hostRuleRe = /@host[^{]*{(([^}]*?{[^{]*?}[\s\S]*?)+)}/gim,
     cssPartRe = /::part\(([^)]*)\)/gim,
     // note: :host pre-processed to -shadowcsshost.
     polyfillHost = '-shadowcsshost',
-    cssColonHostRe = new RegExp('(' + polyfillHost +
-        ')(?:\\((' +
+    // note: :ancestor pre-processed to -shadowcssancestor.
+    polyfillAncestor = '-shadowcssancestor',
+    parenSuffix = ')(?:\\((' +
         '(?:\\([^)(]*\\)|[^)(]*)+?' +
-        ')\\))?([^,{]*)', 'gim'),
+        ')\\))?([^,{]*)';
+    cssColonHostRe = new RegExp('(' + polyfillHost + parenSuffix, 'gim'),
+    cssColonAncestorRe = new RegExp('(' + polyfillAncestor + parenSuffix, 'gim'),
     selectorReSuffix = '([>\\s~+\[.,{:][\\s\\S]*)?$',
     hostRe = /@host/gim,
     colonHostRe = /\:host/gim,
+    colonAncestorRe = /\:ancestor/gim,
     /* host name without combinator */
     polyfillHostNoCombinator = polyfillHost + '-no-combinator',
     polyfillHostRe = new RegExp(polyfillHost, 'gim');
+    polyfillAncestorRe = new RegExp(polyfillAncestor, 'gim');
 
 function stylesToCssText(styles, preserveComments) {
   var cssText = '';
@@ -7281,12 +7421,15 @@ function addCssToDocument(cssText) {
   }
 }
 
+var SHIM_ATTRIBUTE = 'shim-shadowdom';
+var SHIMMED_ATTRIBUTE = 'shim-shadowdom-css';
+
 var sheet;
 function getSheet() {
   if (!sheet) {
     sheet = document.createElement("style");
-    sheet.setAttribute('ShadowCSSShim', '');
-    sheet.shadowCssShim = true;
+    sheet.setAttribute(SHIMMED_ATTRIBUTE, '');
+    sheet[SHIMMED_ATTRIBUTE] = true;
   }
   return sheet;
 }
@@ -7298,36 +7441,70 @@ if (window.ShadowDOMPolyfill) {
   var head = doc.querySelector('head');
   head.insertBefore(getSheet(), head.childNodes[0]);
 
+  // TODO(sorvell): monkey-patching HTMLImports is abusive;
+  // consider a better solution.
   document.addEventListener('DOMContentLoaded', function() {
+    var urlResolver = scope.urlResolver;
+    
     if (window.HTMLImports && !HTMLImports.useNative) {
-      HTMLImports.importer.preloadSelectors += 
-          ', link[rel=stylesheet]:not([nopolyfill])';
+      var SHIM_SHEET_SELECTOR = 'link[rel=stylesheet]' +
+          '[' + SHIM_ATTRIBUTE + ']';
+      var SHIM_STYLE_SELECTOR = 'style[' + SHIM_ATTRIBUTE + ']';
+      HTMLImports.importer.documentPreloadSelectors += ',' + SHIM_SHEET_SELECTOR;
+      HTMLImports.importer.importsPreloadSelectors += ',' + SHIM_SHEET_SELECTOR;
+
+      HTMLImports.parser.documentSelectors = [
+        HTMLImports.parser.documentSelectors,
+        SHIM_SHEET_SELECTOR,
+        SHIM_STYLE_SELECTOR
+      ].join(',');
+  
+      var originalParseGeneric = HTMLImports.parser.parseGeneric;
+
       HTMLImports.parser.parseGeneric = function(elt) {
-        if (elt.shadowCssShim) {
+        if (elt[SHIMMED_ATTRIBUTE]) {
           return;
         }
-        var style = elt;
-        if (!elt.hasAttribute('nopolyfill')) {
-          if (elt.__resource) {
-            style = elt.ownerDocument.createElement('style');
-            style.textContent = Platform.loader.resolveUrlsInCssText(
-                elt.__resource, elt.href);
-            // remove links from main document
-            if (elt.ownerDocument === doc) {
-              elt.parentNode.removeChild(elt);
-            }
-          } else {
-            Platform.loader.resolveUrlsInStyle(style);  
-          }
-          var styles = [style];
-          style.textContent = ShadowCSS.stylesToShimmedCssText(styles, styles);
-          style.shadowCssShim = true;
+        var style = elt.__importElement || elt;
+        if (!style.hasAttribute(SHIM_ATTRIBUTE)) {
+          originalParseGeneric.call(this, elt);
+          return;
         }
+        if (elt.__resource) {
+          style = elt.ownerDocument.createElement('style');
+          style.textContent = urlResolver.resolveCssText(
+              elt.__resource, elt.href);
+        } else {
+          urlResolver.resolveStyle(style);  
+        }
+        var styles = [style];
+        style.textContent = ShadowCSS.stylesToShimmedCssText(styles, styles);
+        style.removeAttribute(SHIM_ATTRIBUTE, '');
+        style.setAttribute(SHIMMED_ATTRIBUTE, '');
+        style[SHIMMED_ATTRIBUTE] = true;
         // place in document
         if (style.parentNode !== head) {
-          head.appendChild(style);
+          // replace links in head
+          if (elt.parentNode === head) {
+            head.replaceChild(style, elt);
+          } else {
+            head.appendChild(style);
+          }
+        }
+        style.__importParsed = true;
+        this.markParsingComplete(elt);
+      }
+
+      var hasResource = HTMLImports.parser.hasResource;
+      HTMLImports.parser.hasResource = function(node) {
+        if (node.localName === 'link' && node.rel === 'stylesheet' &&
+            node.hasAttribute(SHIM_ATTRIBUTE)) {
+          return (node.__resource);
+        } else {
+          return hasResource.call(this, node);
         }
       }
+
     }
   });
 }
@@ -7397,6 +7574,572 @@ scope.ShadowCSS = ShadowCSS;
 
 })();
 }
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+
+(function(scope) {
+  'use strict';
+
+  // feature detect for URL constructor
+  var hasWorkingUrl = false;
+  if (!scope.forceJURL) {
+    try {
+      var u = new URL('b', 'http://a');
+      hasWorkingUrl = u.href === 'http://a/b';
+    } catch(e) {}
+  }
+
+  if (hasWorkingUrl)
+    return;
+
+  var relative = Object.create(null);
+  relative['ftp'] = 21;
+  relative['file'] = 0;
+  relative['gopher'] = 70;
+  relative['http'] = 80;
+  relative['https'] = 443;
+  relative['ws'] = 80;
+  relative['wss'] = 443;
+
+  var relativePathDotMapping = Object.create(null);
+  relativePathDotMapping['%2e'] = '.';
+  relativePathDotMapping['.%2e'] = '..';
+  relativePathDotMapping['%2e.'] = '..';
+  relativePathDotMapping['%2e%2e'] = '..';
+
+  function isRelativeScheme(scheme) {
+    return relative[scheme] !== undefined;
+  }
+
+  function invalid() {
+    clear.call(this);
+    this._isInvalid = true;
+  }
+
+  function IDNAToASCII(h) {
+    if ('' == h) {
+      invalid.call(this)
+    }
+    // XXX
+    return h.toLowerCase()
+  }
+
+  function percentEscape(c) {
+    var unicode = c.charCodeAt(0);
+    if (unicode > 0x20 &&
+       unicode < 0x7F &&
+       // " # < > ? `
+       [0x22, 0x23, 0x3C, 0x3E, 0x3F, 0x60].indexOf(unicode) == -1
+      ) {
+      return c;
+    }
+    return encodeURIComponent(c);
+  }
+
+  function percentEscapeQuery(c) {
+    // XXX This actually needs to encode c using encoding and then
+    // convert the bytes one-by-one.
+
+    var unicode = c.charCodeAt(0);
+    if (unicode > 0x20 &&
+       unicode < 0x7F &&
+       // " # < > ` (do not escape '?')
+       [0x22, 0x23, 0x3C, 0x3E, 0x60].indexOf(unicode) == -1
+      ) {
+      return c;
+    }
+    return encodeURIComponent(c);
+  }
+
+  var EOF = undefined,
+      ALPHA = /[a-zA-Z]/,
+      ALPHANUMERIC = /[a-zA-Z0-9\+\-\.]/;
+
+  function parse(input, stateOverride, base) {
+    function err(message) {
+      errors.push(message)
+    }
+
+    var state = stateOverride || 'scheme start',
+        cursor = 0,
+        buffer = '',
+        seenAt = false,
+        seenBracket = false,
+        errors = [];
+
+    loop: while ((input[cursor - 1] != EOF || cursor == 0) && !this._isInvalid) {
+      var c = input[cursor];
+      switch (state) {
+        case 'scheme start':
+          if (c && ALPHA.test(c)) {
+            buffer += c.toLowerCase(); // ASCII-safe
+            state = 'scheme';
+          } else if (!stateOverride) {
+            buffer = '';
+            state = 'no scheme';
+            continue;
+          } else {
+            err('Invalid scheme.');
+            break loop;
+          }
+          break;
+
+        case 'scheme':
+          if (c && ALPHANUMERIC.test(c)) {
+            buffer += c.toLowerCase(); // ASCII-safe
+          } else if (':' == c) {
+            this._scheme = buffer;
+            buffer = '';
+            if (stateOverride) {
+              break loop;
+            }
+            if (isRelativeScheme(this._scheme)) {
+              this._isRelative = true;
+            }
+            if ('file' == this._scheme) {
+              state = 'relative';
+            } else if (this._isRelative && base && base._scheme == this._scheme) {
+              state = 'relative or authority';
+            } else if (this._isRelative) {
+              state = 'authority first slash';
+            } else {
+              state = 'scheme data';
+            }
+          } else if (!stateOverride) {
+            buffer = '';
+            cursor = 0;
+            state = 'no scheme';
+            continue;
+          } else if (EOF == c) {
+            break loop;
+          } else {
+            err('Code point not allowed in scheme: ' + c)
+            break loop;
+          }
+          break;
+
+        case 'scheme data':
+          if ('?' == c) {
+            query = '?';
+            state = 'query';
+          } else if ('#' == c) {
+            this._fragment = '#';
+            state = 'fragment';
+          } else {
+            // XXX error handling
+            if (EOF != c && '\t' != c && '\n' != c && '\r' != c) {
+              this._schemeData += percentEscape(c);
+            }
+          }
+          break;
+
+        case 'no scheme':
+          if (!base || !(isRelativeScheme(base._scheme))) {
+            err('Missing scheme.');
+            invalid.call(this);
+          } else {
+            state = 'relative';
+            continue;
+          }
+          break;
+
+        case 'relative or authority':
+          if ('/' == c && '/' == input[cursor+1]) {
+            state = 'authority ignore slashes';
+          } else {
+            err('Expected /, got: ' + c);
+            state = 'relative';
+            continue
+          }
+          break;
+
+        case 'relative':
+          this._isRelative = true;
+          if ('file' != this._scheme)
+            this._scheme = base._scheme;
+          if (EOF == c) {
+            this._host = base._host;
+            this._port = base._port;
+            this._path = base._path.slice();
+            this._query = base._query;
+            break loop;
+          } else if ('/' == c || '\\' == c) {
+            if ('\\' == c)
+              err('\\ is an invalid code point.');
+            state = 'relative slash';
+          } else if ('?' == c) {
+            this._host = base._host;
+            this._port = base._port;
+            this._path = base._path.slice();
+            this._query = '?';
+            state = 'query';
+          } else if ('#' == c) {
+            this._host = base._host;
+            this._port = base._port;
+            this._path = base._path.slice();
+            this._query = base._query;
+            this._fragment = '#';
+            state = 'fragment';
+          } else {
+            var nextC = input[cursor+1]
+            var nextNextC = input[cursor+2]
+            if (
+              'file' != this._scheme || !ALPHA.test(c) ||
+              (nextC != ':' && nextC != '|') ||
+              (EOF != nextNextC && '/' != nextNextC && '\\' != nextNextC && '?' != nextNextC && '#' != nextNextC)) {
+              this._host = base._host;
+              this._port = base._port;
+              this._path = base._path.slice();
+              this._path.pop();
+            }
+            state = 'relative path';
+            continue;
+          }
+          break;
+
+        case 'relative slash':
+          if ('/' == c || '\\' == c) {
+            if ('\\' == c) {
+              err('\\ is an invalid code point.');
+            }
+            if ('file' == this._scheme) {
+              state = 'file host';
+            } else {
+              state = 'authority ignore slashes';
+            }
+          } else {
+            if ('file' != this._scheme) {
+              this._host = base._host;
+              this._port = base._port;
+            }
+            state = 'relative path';
+            continue;
+          }
+          break;
+
+        case 'authority first slash':
+          if ('/' == c) {
+            state = 'authority second slash';
+          } else {
+            err("Expected '/', got: " + c);
+            state = 'authority ignore slashes';
+            continue;
+          }
+          break;
+
+        case 'authority second slash':
+          state = 'authority ignore slashes';
+          if ('/' != c) {
+            err("Expected '/', got: " + c);
+            continue;
+          }
+          break;
+
+        case 'authority ignore slashes':
+          if ('/' != c && '\\' != c) {
+            state = 'authority';
+            continue;
+          } else {
+            err('Expected authority, got: ' + c);
+          }
+          break;
+
+        case 'authority':
+          if ('@' == c) {
+            if (seenAt) {
+              err('@ already seen.');
+              buffer += '%40';
+            }
+            seenAt = true;
+            for (var i = 0; i < buffer.length; i++) {
+              var cp = buffer[i];
+              if ('\t' == cp || '\n' == cp || '\r' == cp) {
+                err('Invalid whitespace in authority.');
+                continue;
+              }
+              // XXX check URL code points
+              if (':' == cp && null === this._password) {
+                this._password = '';
+                continue;
+              }
+              var tempC = percentEscape(cp);
+              (null !== this._password) ? this._password += tempC : this._username += tempC;
+            }
+            buffer = '';
+          } else if (EOF == c || '/' == c || '\\' == c || '?' == c || '#' == c) {
+            cursor -= buffer.length;
+            buffer = '';
+            state = 'host';
+            continue;
+          } else {
+            buffer += c;
+          }
+          break;
+
+        case 'file host':
+          if (EOF == c || '/' == c || '\\' == c || '?' == c || '#' == c) {
+            if (buffer.length == 2 && ALPHA.test(buffer[0]) && (buffer[1] == ':' || buffer[1] == '|')) {
+              state = 'relative path';
+            } else if (buffer.length == 0) {
+              state = 'relative path start';
+            } else {
+              this._host = IDNAToASCII.call(this, buffer);
+              buffer = '';
+              state = 'relative path start';
+            }
+            continue;
+          } else if ('\t' == c || '\n' == c || '\r' == c) {
+            err('Invalid whitespace in file host.');
+          } else {
+            buffer += c;
+          }
+          break;
+
+        case 'host':
+        case 'hostname':
+          if (':' == c && !seenBracket) {
+            // XXX host parsing
+            this._host = IDNAToASCII.call(this, buffer);
+            buffer = '';
+            state = 'port';
+            if ('hostname' == stateOverride) {
+              break loop;
+            }
+          } else if (EOF == c || '/' == c || '\\' == c || '?' == c || '#' == c) {
+            this._host = IDNAToASCII.call(this, buffer);
+            buffer = '';
+            state = 'relative path start';
+            if (stateOverride) {
+              break loop;
+            }
+            continue;
+          } else if ('\t' != c && '\n' != c && '\r' != c) {
+            if ('[' == c) {
+              seenBracket = true;
+            } else if (']' == c) {
+              seenBracket = false;
+            }
+            buffer += c;
+          } else {
+            err('Invalid code point in host/hostname: ' + c);
+          }
+          break;
+
+        case 'port':
+          if (/[0-9]/.test(c)) {
+            buffer += c;
+          } else if (EOF == c || '/' == c || '\\' == c || '?' == c || '#' == c || stateOverride) {
+            if ('' != buffer) {
+              var temp = parseInt(buffer, 10);
+              if (temp != relative[this._scheme]) {
+                this._port = temp + '';
+              }
+              buffer = '';
+            }
+            if (stateOverride) {
+              break loop;
+            }
+            state = 'relative path start';
+            continue;
+          } else if ('\t' == c || '\n' == c || '\r' == c) {
+            err('Invalid code point in port: ' + c);
+          } else {
+            invalid.call(this);
+          }
+          break;
+
+        case 'relative path start':
+          if ('\\' == c)
+            err("'\\' not allowed in path.");
+          state = 'relative path';
+          if ('/' != c && '\\' != c) {
+            continue;
+          }
+          break;
+
+        case 'relative path':
+          if (EOF == c || '/' == c || '\\' == c || (!stateOverride && ('?' == c || '#' == c))) {
+            if ('\\' == c) {
+              err('\\ not allowed in relative path.');
+            }
+            var tmp;
+            if (tmp = relativePathDotMapping[buffer.toLowerCase()]) {
+              buffer = tmp;
+            }
+            if ('..' == buffer) {
+              this._path.pop();
+              if ('/' != c && '\\' != c) {
+                this._path.push('');
+              }
+            } else if ('.' == buffer && '/' != c && '\\' != c) {
+              this._path.push('');
+            } else if ('.' != buffer) {
+              if ('file' == this._scheme && this._path.length == 0 && buffer.length == 2 && ALPHA.test(buffer[0]) && buffer[1] == '|') {
+                buffer = buffer[0] + ':';
+              }
+              this._path.push(buffer);
+            }
+            buffer = '';
+            if ('?' == c) {
+              this._query = '?';
+              state = 'query';
+            } else if ('#' == c) {
+              this._fragment = '#';
+              state = 'fragment';
+            }
+          } else if ('\t' != c && '\n' != c && '\r' != c) {
+            buffer += percentEscape(c);
+          }
+          break;
+
+        case 'query':
+          if (!stateOverride && '#' == c) {
+            this._fragment = '#';
+            state = 'fragment';
+          } else if (EOF != c && '\t' != c && '\n' != c && '\r' != c) {
+            this._query += percentEscapeQuery(c);
+          }
+          break;
+
+        case 'fragment':
+          if (EOF != c && '\t' != c && '\n' != c && '\r' != c) {
+            this._fragment += c;
+          }
+          break;
+      }
+
+      cursor++;
+    }
+  }
+
+  function clear() {
+    this._scheme = '';
+    this._schemeData = '';
+    this._username = '';
+    this._password = null;
+    this._host = '';
+    this._port = '';
+    this._path = [];
+    this._query = '';
+    this._fragment = '';
+    this._isInvalid = false;
+    this._isRelative = false;
+  }
+
+  // Does not process domain names or IP addresses.
+  // Does not handle encoding for the query parameter.
+  function jURL(url, base /* , encoding */) {
+    if (base !== undefined && !(base instanceof jURL))
+      base = new jURL(String(base));
+
+    this._url = url;
+    clear.call(this);
+
+    var input = url.replace(/^[ \t\r\n\f]+|[ \t\r\n\f]+$/g, '');
+    // encoding = encoding || 'utf-8'
+
+    parse.call(this, input, null, base);
+  }
+
+  jURL.prototype = {
+    get href() {
+      if (this._isInvalid)
+        return this._url;
+
+      var authority = '';
+      if ('' != this._username || null != this._password) {
+        authority = this._username +
+            (null != this._password ? ':' + this._password : '') + '@';
+      }
+
+      return this.protocol +
+          (this._isRelative ? '//' + authority + this.host : '') +
+          this.pathname + this._query + this._fragment;
+    },
+    set href(href) {
+      clear.call(this);
+      parse.call(this, href);
+    },
+
+    get protocol() {
+      return this._scheme + ':';
+    },
+    set protocol(protocol) {
+      if (this._isInvalid)
+        return;
+      parse.call(this, protocol + ':', 'scheme start');
+    },
+
+    get host() {
+      return this._isInvalid ? '' : this._port ?
+          this._host + ':' + this._port : this._host;
+    },
+    set host(host) {
+      if (this._isInvalid || !this._isRelative)
+        return;
+      parse.call(this, host, 'host');
+    },
+
+    get hostname() {
+      return this._host;
+    },
+    set hostname(hostname) {
+      if (this._isInvalid || !this._isRelative)
+        return;
+      parse.call(this, hostname, 'hostname');
+    },
+
+    get port() {
+      return this._port;
+    },
+    set port(port) {
+      if (this._isInvalid || !this._isRelative)
+        return;
+      parse.call(this, port, 'port');
+    },
+
+    get pathname() {
+      return this._isInvalid ? '' : this._isRelative ?
+          '/' + this._path.join('/') : this._schemeData;
+    },
+    set pathname(pathname) {
+      if (this._isInvalid || !this._isRelative)
+        return;
+      this._path = [];
+      parse.call(this, pathname, 'relative path start');
+    },
+
+    get search() {
+      return this._isInvalid || !this._query || '?' == this._query ?
+          '' : this._query;
+    },
+    set search(search) {
+      if (this._isInvalid || !this._isRelative)
+        return;
+      this._query = '?';
+      if ('?' == search[0])
+        search = search.slice(1);
+      parse.call(this, search, 'query');
+    },
+
+    get hash() {
+      return this._isInvalid || !this._fragment || '#' == this._fragment ?
+          '' : this._fragment;
+    },
+    set hash(hash) {
+      if (this._isInvalid)
+        return;
+      this._fragment = '#';
+      if ('#' == hash[0])
+        hash = hash.slice(1);
+      parse.call(this, hash, 'fragment');
+    }
+  };
+
+  scope.URL = jURL;
+
+})(window);
+
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
@@ -7819,203 +8562,107 @@ window.templateContent = window.templateContent || function(inTemplate) {
  * license that can be found in the LICENSE file.
  */
 (function(scope) {
-  /*
-    Shim :unresolved via an attribute unresolved.
-    TODO(sorvell): This is currently done once when the first
-    round of elements are upgraded. This is incorrect, and it will
-    need to be done dynamically.
-    The 'resolved' attribute is experimental and may be removed.
-  */
-  var TRANSITION_TIME = 0.2;
-  var UNRESOLVED = 'unresolved';
-  var RESOLVED = 'resolved';
-  var UNRESOLVED_SELECTOR = '[' + UNRESOLVED + ']';
-  var RESOLVED_SELECTOR = '[' + RESOLVED + ']';
+
+  // TODO(sorvell): It's desireable to provide a default stylesheet 
+  // that's convenient for styling unresolved elements, but
+  // it's cumbersome to have to include this manually in every page.
+  // It would make sense to put inside some HTMLImport but 
+  // the HTMLImports polyfill does not allow loading of stylesheets 
+  // that block rendering. Therefore this injection is tolerated here.
+
   var style = document.createElement('style');
-  
-  style.textContent = UNRESOLVED_SELECTOR + ' { ' +
-      'opacity: 0; display: block; overflow: hidden; } \n' +
-      RESOLVED_SELECTOR +  '{ display: block; overflow: hidden;\n' +
-      '-webkit-transition: opacity ' + TRANSITION_TIME + 's; ' +
-      'transition: opacity ' + TRANSITION_TIME +'s; }\n';
+  style.textContent = ''
+      + 'body {'
+      + 'transition: opacity ease-in 0.2s;' 
+      + ' } \n'
+      + 'body[unresolved] {'
+      + 'opacity: 0; display: block; overflow: hidden;' 
+      + ' } \n'
+      ;
   var head = document.querySelector('head');
   head.insertBefore(style, head.firstChild);
 
-  // remove unresolved and apply resolved class
-  function resolveElements() {
-    requestAnimationFrame(function() {
-      var nodes = document.querySelectorAll(UNRESOLVED_SELECTOR);
-      for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
-        n.removeAttribute(UNRESOLVED);
-        n.setAttribute(RESOLVED, '');
-      }
+})(Platform);
 
-      // NOTE: depends on transition end event to remove 'resolved' class.
-      if (nodes.length) {
-        var removeResolved = function() {
-          for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
-            n.removeAttribute(RESOLVED);
-          }
-          document.body.removeEventListener(endEvent, removeResolved, false);
-        }
-        document.body.addEventListener(endEvent, removeResolved, false);
-      };
+(function(scope) {
 
-    });
+  function withDependencies(task, depends) {
+    depends = depends || [];
+    if (!depends.map) {
+      depends = [depends];
+    }
+    return task.apply(this, depends.map(marshal));
   }
 
-  // determine transition end event
-  var endEvent = (document.documentElement.style.webkitTransition !== undefined) ?
-      'webkitTransitionEnd' : 'transitionend';
+  function module(name, dependsOrFactory, moduleFactory) {
+    var module;
+    switch (arguments.length) {
+      case 0:
+        return;
+      case 1:
+        module = null;
+        break;
+      case 2:
+        module = dependsOrFactory.apply(this);
+        break;
+      default:
+        module = withDependencies(moduleFactory, dependsOrFactory);
+        break;
+    }
+    modules[name] = module;
+  };
 
-  // hookup auto-unveiling
-  window.addEventListener('WebComponentsReady', resolveElements);
+  function marshal(name) {
+    return modules[name];
+  }
+
+  var modules = {};
+
+  function using(depends, task) {
+    HTMLImports.whenImportsReady(function() {
+      withDependencies(task, depends);
+    });
+  };
+
+  // exports
+
+  scope.marshal = marshal;
+  scope.module = module;
+  scope.using = using;
+
+})(window);
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+(function(scope) {
+
+var iterations = 0;
+var callbacks = [];
+var twiddle = document.createTextNode('');
+
+function endOfMicrotask(callback) {
+  twiddle.textContent = iterations++;
+  callbacks.push(callback);
+}
+
+function atEndOfMicrotask() {
+  while (callbacks.length) {
+    callbacks.shift()();
+  }
+}
+
+new (window.MutationObserver || JsMutationObserver)(atEndOfMicrotask)
+  .observe(twiddle, {characterData: true})
+  ;
+
+// exports
+
+scope.endOfMicrotask = endOfMicrotask;
 
 })(Platform);
 
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-window.HTMLImports = window.HTMLImports || {flags:{}};
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-
-(function(scope) {
-
-  // imports
-  var path = scope.path;
-  var xhr = scope.xhr;
-
-  var Loader = function(onLoad, onComplete) {
-    this.cache = {};
-    this.onload = onLoad;
-    this.oncomplete = onComplete;
-    this.inflight = 0;
-    this.pending = {};
-  };
-
-  Loader.prototype = {
-    addNodes: function(nodes) {
-      // number of transactions to complete
-      this.inflight += nodes.length;
-      // commence transactions
-      forEach(nodes, this.require, this);
-      // anything to do?
-      this.checkDone();
-    },
-    require: function(elt) {
-      var url = elt.src || elt.href;
-      // ensure we have a standard url that can be used
-      // reliably for deduping.
-      // TODO(sjmiles): ad-hoc
-      elt.__nodeUrl = url;
-      // deduplication
-      if (!this.dedupe(url, elt)) {
-        // fetch this resource
-        this.fetch(url, elt);
-      }
-    },
-    dedupe: function(url, elt) {
-      if (this.pending[url]) {
-        // add to list of nodes waiting for inUrl
-        this.pending[url].push(elt);
-        // don't need fetch
-        return true;
-      }
-      if (this.cache[url]) {
-        // complete load using cache data
-        this.onload(url, elt, this.cache[url]);
-        // finished this transaction
-        this.tail();
-        // don't need fetch
-        return true;
-      }
-      // first node waiting for inUrl
-      this.pending[url] = [elt];
-      // need fetch (not a dupe)
-      return false;
-    },
-    fetch: function(url, elt) {
-      var receiveXhr = function(err, resource) {
-        this.receive(url, elt, err, resource);
-      }.bind(this);
-      xhr.load(url, receiveXhr);
-      // TODO(sorvell): blocked on
-      // https://code.google.com/p/chromium/issues/detail?id=257221
-      // xhr'ing for a document makes scripts in imports runnable; otherwise
-      // they are not; however, it requires that we have doctype=html in
-      // the import which is unacceptable. This is only needed on Chrome
-      // to avoid the bug above.
-      /*
-      if (isDocumentLink(elt)) {
-        xhr.loadDocument(url, receiveXhr);
-      } else {
-        xhr.load(url, receiveXhr);
-      }
-      */
-    },
-    receive: function(url, elt, err, resource) {
-      if (!err) {
-        this.cache[url] = resource;
-      }
-      this.pending[url].forEach(function(e) {
-        if (!err) {
-          this.onload(url, e, resource);
-        }
-        this.tail();
-      }, this);
-      this.pending[url] = null;
-    },
-    tail: function() {
-      --this.inflight;
-      this.checkDone();
-    },
-    checkDone: function() {
-      if (!this.inflight) {
-        this.oncomplete();
-      }
-    }
-  };
-
-  xhr = xhr || {
-    async: true,
-    ok: function(request) {
-      return (request.status >= 200 && request.status < 300)
-          || (request.status === 304)
-          || (request.status === 0);
-    },
-    load: function(url, next, nextContext) {
-      var request = new XMLHttpRequest();
-      if (scope.flags.debug || scope.flags.bust) {
-        url += '?' + Math.random();
-      }
-      request.open('GET', url, xhr.async);
-      request.addEventListener('readystatechange', function(e) {
-        if (request.readyState === 4) {
-          next.call(nextContext, !xhr.ok(request) && request,
-              request.response || request.responseText, url);
-        }
-      });
-      request.send();
-      return request;
-    },
-    loadDocument: function(url, next, nextContext) {
-      this.load(url, next, nextContext).responseType = 'document';
-    }
-  };
-
-  var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
-
-  // exports
-  scope.xhr = xhr;
-  scope.Loader = Loader;
-
-})(window.HTMLImports);
 
 /*
  * Copyright 2013 The Polymer Authors. All rights reserved.
@@ -8025,547 +8672,110 @@ window.HTMLImports = window.HTMLImports || {flags:{}};
 
 (function(scope) {
 
-var hasNative = ('import' in document.createElement('link'));
-var useNative = !scope.flags.imports && hasNative;
-
-var IMPORT_LINK_TYPE = 'import';
-
-if (!useNative) {
-  // imports
-  var Loader = scope.Loader;
-  var xhr = scope.xhr;
-
-  // importer
-  // highlander object represents a primary document (the argument to 'load')
-  // at the root of a tree of documents
-
-  // for any document, importer:
-  // - loads any linked documents (with deduping), modifies paths and feeds them back into importer
-  // - loads text of external script tags
-  // - loads text of external style tags inside of <element>, modifies paths
-
-  // when importer 'modifies paths' in a document, this includes
-  // - href/src/action in node attributes
-  // - paths in inline stylesheets
-  // - all content inside templates
-
-  // linked style sheets in an import have their own path fixed up when their containing import modifies paths
-  // linked style sheets in an <element> are loaded, and the content gets path fixups
-  // inline style sheets get path fixups when their containing import modifies paths
-
-  var importLoader;
-  var STYLE_LINK_TYPE = 'stylesheet';
-
-  var importer = {
-    documents: {},
-    cache: {},
-    preloadSelectors: [
-      'link[rel=' + IMPORT_LINK_TYPE + ']',
-      'template',
-      'script[src]:not([type])',
-      'script[src][type="text/javascript"]'
-    ].join(','),
-    loader: function(next) {
-      if (importLoader && importLoader.inflight) {
-        var currentComplete = importLoader.oncomplete;
-        importLoader.oncomplete = function() {
-          currentComplete();
-          next();
-        }
-        return importLoader;
-      }
-      // construct a loader instance
-      importLoader = new Loader(importer.loaded, next);
-      // alias the importer cache (for debugging)
-      importLoader.cache = importer.cache;
-      return importLoader;
-    },
-    load: function(doc, next) {
-      // get a loader instance from the factory
-      importLoader = importer.loader(next);
-      // add nodes from document into loader queue
-      importer.preload(doc);
-    },
-    preload: function(doc) {
-      var nodes = this.marshalNodes(doc);
-      // add these nodes to loader's queue
-      importLoader.addNodes(nodes);
-    },
-    marshalNodes: function(doc) {
-      // all preloadable nodes in inDocument
-      var nodes = doc.querySelectorAll(importer.preloadSelectors);
-      // from the main document, only load imports
-      // TODO(sjmiles): do this by altering the selector list instead
-      nodes = this.filterMainDocumentNodes(doc, nodes);
-      // extra link nodes from templates, filter templates out of the nodes list
-      nodes = this.extractTemplateNodes(nodes);
-      return nodes;
-    },
-    filterMainDocumentNodes: function(doc, nodes) {
-      if (doc === document) {
-        nodes = Array.prototype.filter.call(nodes, function(n) {
-          return !isScript(n);
-        });
-      }
-      return nodes;
-    },
-    extractTemplateNodes: function(nodes) {
-      var extra = [];
-      nodes = Array.prototype.filter.call(nodes, function(n) {
-        if (n.localName === 'template') {
-          if (n.content) {
-            var l$ = n.content.querySelectorAll('link[rel=' + STYLE_LINK_TYPE +
-              ']');
-            if (l$.length) {
-              extra = extra.concat(Array.prototype.slice.call(l$, 0));
-            }
-          }
-          return false;
-        }
-        return true;
-      });
-      if (extra.length) {
-        nodes = nodes.concat(extra);
-      }
-      return nodes;
-    },
-    loaded: function(url, elt, resource) {
-      if (isDocumentLink(elt)) {
-        var document = importer.documents[url];
-        // if we've never seen a document at this url
-        if (!document) {
-          // generate an HTMLDocument from data
-          document = makeDocument(resource, url);
-          // cache document
-          importer.documents[url] = document;
-          // add nodes from this document to the loader queue
-          importer.preload(document);
-        }
-        // don't store import record until we're actually loaded
-        // store document resource
-        elt.import = elt.content = resource = document;
-      }
-      // store generic resource
-      // TODO(sorvell): fails for nodes inside <template>.content
-      // see https://code.google.com/p/chromium/issues/detail?id=249381.
-      elt.__resource = resource;
-    }
-  };
-
-  function isDocumentLink(elt) {
-    return isLinkRel(elt, IMPORT_LINK_TYPE);
-  }
-
-  function isStylesheetLink(elt) {
-    return isLinkRel(elt, STYLE_LINK_TYPE);
-  }
-
-  function isLinkRel(elt, rel) {
-    return elt.localName === 'link' && elt.getAttribute('rel') === rel;
-  }
-
-  function isScript(elt) {
-    return elt.localName === 'script';
-  }
-
-  function makeDocument(resource, url) {
-    // create a new HTML document
-    var doc = resource;
-    if (!(doc instanceof Document)) {
-      doc = document.implementation.createHTMLDocument(IMPORT_LINK_TYPE);
-    }
-    // cache the new document's source url
-    doc._URL = url;
-    // establish a relative path via <base>
-    var base = doc.createElement('base');
-    //base.setAttribute('href', document.baseURI || document.URL);
-    base.setAttribute('href', url);
-    doc.head.appendChild(base);
-    // install HTML last as it may trigger CustomElement upgrades
-    // TODO(sjmiles): problem wrt to template boostrapping below,
-    // template bootstrapping must (?) come before element upgrade
-    // but we cannot bootstrap templates until they are in a document
-    // which is too late
-    if (!(resource instanceof Document)) {
-      // install html
-      doc.body.innerHTML = resource;
-    }
-    // TODO(sorvell): ideally this code is not aware of Template polyfill,
-    // but for now the polyfill needs help to bootstrap these templates
-    if (window.HTMLTemplateElement && HTMLTemplateElement.bootstrap) {
-      HTMLTemplateElement.bootstrap(doc);
-    }
-    return doc;
-  }
-
-  var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
-
-  // exports
-  scope.importer = importer;
-} else {
-  // do nothing if using native imports
-}
-
-// NOTE: We cannot polyfill document.currentScript because it's not possible
-// both to override and maintain the ability to capture the native value;
-// therefore we choose to expose _currentScript both when native imports
-// and the polyfill are in use.
-Object.defineProperty(document, '_currentScript', {
-  get: function() {
-    return HTMLImports.currentScript || document.currentScript;
-  },
-  writeable: true,
-  configurable: true
-});
-
-// TODO(sorvell): multiple calls will install multiple event listeners
-// which may not be desireable; calls should resolve in the correct order,
-// however.
-function whenImportsReady(callback, doc) {
-  doc = doc || document;
-  // if document is loading, wait and try again
-  if (doc.readyState === 'loading') {
-    doc.addEventListener('DOMContentLoaded', function() {
-      whenImportsReady(callback, doc);
-    })
-    return;
-  }
-  var imports = doc.querySelectorAll('link[rel=import]');
-  var loaded = 0, l = imports.length;
-  function checkDone(d) { 
-    if (loaded == l) {
-      // go async to ensure parser isn't stuck on a script tag
-      requestAnimationFrame(callback);
-    }
-  }
-  // called in context of import
-  function loadedImport() {
-    loaded++;
-    checkDone();
-  }
-  if (l) {
-    for (var i=0, imp; (i<l) && (imp=imports[i]); i++) {
-      if (isImportLoaded(imp)) {
-        loadedImport.call(imp);
-      } else {
-        imp.addEventListener('load', loadedImport);
-        imp.addEventListener('error', loadedImport);
-      }
-    }
-  } else {
-    checkDone();
-  }
-}
-
-function isImportLoaded(link) {
-  return useNative ? (link.import && (link.import.readyState !== 'loading')) :
-      link.__importParsed;
-}
-
-// exports
-scope.hasNative = hasNative;
-scope.useNative = useNative;
-scope.whenImportsReady = whenImportsReady;
-scope.IMPORT_LINK_TYPE = IMPORT_LINK_TYPE;
-scope.isImportLoaded = isImportLoaded;
-
-})(window.HTMLImports);
-
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-
-(function(scope) {
-
-var path = scope.path;
-
-var IMPORT_LINK_TYPE = 'import';
-var isIe = /Trident/.test(navigator.userAgent)
-
-// highlander object for parsing a document tree
-
-var importParser = {
-  selectors: [
-    'link[rel=' + IMPORT_LINK_TYPE + ']',
-    'link[rel=stylesheet]',
-    'style',
-    'script:not([type])',
-    'script[type="text/javascript"]'
-  ],
-  map: {
-    link: 'parseLink',
-    script: 'parseScript',
-    style: 'parseStyle'
-  },
-  // TODO(sorvell): because dynamic imports are not supported, users are 
-  // writing code like in https://github.com/Polymer/HTMLImports/issues/40
-  // as a workaround. The code here checking for the existence of
-  // document.scripts is here only to support the workaround.
-  parse: function(document, done) {
-    if (!document.__importParsed) {
-      // only parse once
-      document.__importParsed = true;
-      //console.group('parsing', document.baseURI);
-      var tracker = new LoadTracker(document, done);
-      // all parsable elements in inDocument (depth-first pre-order traversal)
-      var elts = document.querySelectorAll(importParser.selectors);
-      // memoize the number of scripts
-      var scriptCount = document.scripts ? document.scripts.length : 0;
-      // for each parsable node type, call the mapped parsing method
-      for (var i=0, e; i<elts.length && (e=elts[i]); i++) {
-        importParser[importParser.map[e.localName]](e);
-        // if a script was injected, we need to requery our nodes
-        // TODO(sjmiles): injecting nodes above the current script will
-        // result in errors
-        if (document.scripts && scriptCount !== document.scripts.length) {
-          // memoize the new count
-          scriptCount = document.scripts.length;
-          // ensure we have any new nodes in our list
-          elts = document.querySelectorAll(importParser.selectors);
+var urlResolver = {
+  resolveDom: function(root, url) {
+    url = url || root.ownerDocument.baseURI;
+    this.resolveAttributes(root, url);
+    this.resolveStyles(root, url);
+    // handle template.content
+    var templates = root.querySelectorAll('template');
+    if (templates) {
+      for (var i = 0, l = templates.length, t; (i < l) && (t = templates[i]); i++) {
+        if (t.content) {
+          this.resolveDom(t.content, url);
         }
       }
-      //console.groupEnd('parsing', document.baseURI);
-      tracker.open();
-    } else if (done) {
-      done();
     }
   },
-  parseLink: function(linkElt) {
-    if (isDocumentLink(linkElt)) {
-      this.trackElement(linkElt);
-      if (linkElt.__resource) {
-        importParser.parse(linkElt.__resource, function() {
-          // fire load event
-          linkElt.dispatchEvent(new CustomEvent('load', {bubbles: false}));
-        });
-      } else {
-        linkElt.dispatchEvent(new CustomEvent('error', {bubbles: false}));
-      }
-      linkElt.__importParsed = true;
-    } else {
-      // make href relative to main document
-      if (needsMainDocumentContext(linkElt)) {
-        linkElt.href = linkElt.href;
-      }
-      this.parseGeneric(linkElt);
-    }
-  },
-  trackElement: function(elt) {
-    // IE doesn't fire load on style elements
-    if (!isIe || elt.localName !== 'style') {
-      elt.ownerDocument.__loadTracker.require(elt);
-    }
-  },
-  parseStyle: function(elt) {
-    // TODO(sorvell): style element load event can just not fire so clone styles
-    elt = needsMainDocumentContext(elt) ? cloneStyle(elt) : elt;
-    this.parseGeneric(elt);
-  },
-  parseGeneric: function(elt) {
-    // TODO(sorvell): because of a style element needs to be out of 
-    // tree to fire the load event, avoid the check for parentNode that
-    // needsMainDocumentContext does. Why was that necessary? if it is, 
-    // refactor this.
-    //if (needsMainDocumentContext(elt)) {
-    if (!inMainDocument(elt)) {
-      this.trackElement(elt);
-      document.head.appendChild(elt);
-    }
-  },
-  parseScript: function(scriptElt) {
-    if (needsMainDocumentContext(scriptElt)) {
-      // acquire code to execute
-      var code = (scriptElt.__resource || scriptElt.textContent).trim();
-      if (code) {
-        // calculate source map hint
-        var moniker = scriptElt.__nodeUrl;
-        if (!moniker) {
-          moniker = scriptElt.ownerDocument.baseURI;
-          // there could be more than one script this url
-          var tag = '[' + Math.floor((Math.random()+1)*1000) + ']';
-          // TODO(sjmiles): Polymer hack, should be pluggable if we need to allow 
-          // this sort of thing
-          var matches = code.match(/Polymer\(['"]([^'"]*)/);
-          tag = matches && matches[1] || tag;
-          // tag the moniker
-          moniker += '/' + tag + '.js';
-        }
-        // source map hint
-        code += "\n//# sourceURL=" + moniker + "\n";
-        // evaluate the code
-        scope.currentScript = scriptElt;
-        eval.call(window, code);
-        scope.currentScript = null;
+  resolveStyles: function(root, url) {
+    var styles = root.querySelectorAll('style');
+    if (styles) {
+      for (var i = 0, l = styles.length, s; (i < l) && (s = styles[i]); i++) {
+        this.resolveStyle(s, url);
       }
     }
+  },
+  resolveStyle: function(style, url) {
+    url = url || style.ownerDocument.baseURI;
+    style.textContent = this.resolveCssText(style.textContent, url);
+  },
+  resolveCssText: function(cssText, baseUrl) {
+    cssText = replaceUrlsInCssText(cssText, baseUrl, CSS_URL_REGEXP);
+    return replaceUrlsInCssText(cssText, baseUrl, CSS_IMPORT_REGEXP);
+  },
+  resolveAttributes: function(root, url) {
+    if (root.hasAttributes && root.hasAttributes()) {
+      this.resolveElementAttributes(root, url);
+    }
+    // search for attributes that host urls
+    var nodes = root && root.querySelectorAll(URL_ATTRS_SELECTOR);
+    if (nodes) {
+      for (var i = 0, l = nodes.length, n; (i < l) && (n = nodes[i]); i++) {
+        this.resolveElementAttributes(n, url);
+      }
+    }
+  },
+  resolveElementAttributes: function(node, url) {
+    url = url || node.ownerDocument.baseURI;
+    URL_ATTRS.forEach(function(v) {
+      var attr = node.attributes[v];
+      if (attr && attr.value &&
+         (attr.value.search(URL_TEMPLATE_SEARCH) < 0)) {
+        var urlPath = resolveRelativeUrl(url, attr.value);
+        attr.value = urlPath;
+      }
+    });
   }
 };
 
-// clone style with proper path resolution for main document
-// NOTE: styles are the only elements that require direct path fixup.
-function cloneStyle(style) {
-  var clone = style.ownerDocument.createElement('style');
-  clone.textContent = style.textContent;
-  path.resolveUrlsInStyle(clone);
-  return clone;
-}
-
 var CSS_URL_REGEXP = /(url\()([^)]*)(\))/g;
-var CSS_IMPORT_REGEXP = /(@import[\s]*)([^;]*)(;)/g;
+var CSS_IMPORT_REGEXP = /(@import[\s]+(?!url\())([^;]*)(;)/g;
+var URL_ATTRS = ['href', 'src', 'action'];
+var URL_ATTRS_SELECTOR = '[' + URL_ATTRS.join('],[') + ']';
+var URL_TEMPLATE_SEARCH = '{{.*}}';
 
-var path = {
-  resolveUrlsInStyle: function(style) {
-    var doc = style.ownerDocument;
-    var resolver = doc.createElement('a');
-    style.textContent = this.resolveUrlsInCssText(style.textContent, resolver);
-    return style;  
-  },
-  resolveUrlsInCssText: function(cssText, urlObj) {
-    var r = this.replaceUrls(cssText, urlObj, CSS_URL_REGEXP);
-    r = this.replaceUrls(r, urlObj, CSS_IMPORT_REGEXP);
-    return r;
-  },
-  replaceUrls: function(text, urlObj, regexp) {
-    return text.replace(regexp, function(m, pre, url, post) {
-      var urlPath = url.replace(/["']/g, '');
-      urlObj.href = urlPath;
-      urlPath = urlObj.href;
-      return pre + '\'' + urlPath + '\'' + post;
-    });    
+function replaceUrlsInCssText(cssText, baseUrl, regexp) {
+  return cssText.replace(regexp, function(m, pre, url, post) {
+    var urlPath = url.replace(/["']/g, '');
+    urlPath = resolveRelativeUrl(baseUrl, urlPath);
+    return pre + '\'' + urlPath + '\'' + post;
+  });
+}
+
+function resolveRelativeUrl(baseUrl, url) {
+  var u = new URL(url, baseUrl);
+  return makeDocumentRelPath(u.href);
+}
+
+function makeDocumentRelPath(url) {
+  var root = document.baseURI;
+  var u = new URL(url, root);
+  if (u.host === root.host && u.port === root.port &&
+      u.protocol === root.protocol) {
+    return makeRelPath(root.pathname, u.pathname);
+  } else {
+    return url;
   }
 }
 
-function LoadTracker(doc, callback) {
-  this.doc = doc;
-  this.doc.__loadTracker = this;
-  this.callback = callback;
-}
-
-LoadTracker.prototype = {
-  pending: 0,
-  isOpen: false,
-  open: function() {
-    this.isOpen = true;
-    this.checkDone();
-  },
-  add: function() {
-    this.pending++;
-  },
-  require: function(elt) {
-    this.add();
-    //console.log('require', elt, this.pending);
-    var names = ['load', 'error'], self = this;
-    for (var i=0, l=names.length, n; (i<l) && (n=names[i]); i++) {
-      elt.addEventListener(n, function(e) {
-        self.receive(e);
-      });
-    }
-  },
-  receive: function(e) {
-    this.pending--;
-    //console.log('receive', e.target, this.pending);
-    this.checkDone();
-  },
-  checkDone: function() {
-    if (!this.isOpen) {
-      return;
-    }
-    if (this.pending <= 0 && this.callback) {
-      //console.log('done!', this.doc, this.doc.baseURI);
-      this.isOpen = false;
-      this.callback();
-    }
+// make a relative path from source to target
+function makeRelPath(source, target) {
+  var s = source.split('/');
+  var t = target.split('/');
+  while (s.length && s[0] === t[0]){
+    s.shift();
+    t.shift();
   }
-}
-
-var forEach = Array.prototype.forEach.call.bind(Array.prototype.forEach);
-
-function isDocumentLink(elt) {
-  return elt.localName === 'link'
-      && elt.getAttribute('rel') === IMPORT_LINK_TYPE;
-}
-
-function needsMainDocumentContext(node) {
-  // nodes can be moved to the main document:
-  // if they are in a tree but not in the main document
-  return node.parentNode && !inMainDocument(node);
-}
-
-function inMainDocument(elt) {
-  return elt.ownerDocument === document ||
-    // TODO(sjmiles): ShadowDOMPolyfill intrusion
-    elt.ownerDocument.impl === document;
+  for (var i = 0, l = s.length - 1; i < l; i++) {
+    t.unshift('..');
+  }
+  return t.join('/');
 }
 
 // exports
+scope.urlResolver = urlResolver;
 
-scope.parser = importParser;
-scope.path = path;
-
-})(HTMLImports);
-/*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-(function(){
-
-// bootstrap
-
-// IE shim for CustomEvent
-if (typeof window.CustomEvent !== 'function') {
-  window.CustomEvent = function(inType, dictionary) {
-     var e = document.createEvent('HTMLEvents');
-     e.initEvent(inType,
-        dictionary.bubbles === false ? false : true,
-        dictionary.cancelable === false ? false : true,
-        dictionary.detail);
-     return e;
-  };
-}
-
-// TODO(sorvell): SD polyfill intrusion
-var doc = window.ShadowDOMPolyfill ? 
-    window.ShadowDOMPolyfill.wrapIfNeeded(document) : document;
-
-function notifyReady() {
-  HTMLImports.ready = true;
-  HTMLImports.readyTime = new Date().getTime();
-  //console.log('HTMLImportsLoaded');
-  doc.dispatchEvent(
-    new CustomEvent('HTMLImportsLoaded', {bubbles: true})
-  );
-}
-
-if (!HTMLImports.useNative) {
-  function bootstrap() {
-    if (!HTMLImports.useNative) {
-      // preload document resource trees
-      HTMLImports.importer.load(doc, function() {
-        HTMLImports.parser.parse(doc);
-      });
-    }
-  }
-
-  // Allow for asynchronous loading when minified
-  // readyState 'interactive' is expected when loaded with 'async' or 'defer' attributes
-  // note: use interactive state only when not on IE since it can become 
-  // interactive early (see https://github.com/mobify/mobifyjs/issues/136)
-  if (document.readyState === 'complete' ||
-      (document.readyState === 'interactive' && !window.attachEvent)) {
-    bootstrap();
-  } else {
-    document.addEventListener('DOMContentLoaded', bootstrap);
-  }
-}
-
-HTMLImports.whenImportsReady(function() {
-  notifyReady();
-});
-
-})();
+})(Platform);
 
 /*
  * Copyright 2012 The Polymer Authors. All rights reserved.
@@ -9119,6 +9329,802 @@ HTMLImports.whenImportsReady(function() {
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
  */
+window.HTMLImports = window.HTMLImports || {flags:{}};
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+
+  // imports
+  var path = scope.path;
+  var xhr = scope.xhr;
+  var flags = scope.flags;
+
+  // TODO(sorvell): this loader supports a dynamic list of urls
+  // and an oncomplete callback that is called when the loader is done.
+  // The polyfill currently does *not* need this dynamism or the onComplete
+  // concept. Because of this, the loader could be simplified quite a bit.
+  var Loader = function(onLoad, onComplete) {
+    this.cache = {};
+    this.onload = onLoad;
+    this.oncomplete = onComplete;
+    this.inflight = 0;
+    this.pending = {};
+  };
+
+  Loader.prototype = {
+    addNodes: function(nodes) {
+      // number of transactions to complete
+      this.inflight += nodes.length;
+      // commence transactions
+      for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
+        this.require(n);
+      }
+      // anything to do?
+      this.checkDone();
+    },
+    addNode: function(node) {
+      // number of transactions to complete
+      this.inflight++;
+      // commence transactions
+      this.require(node);
+      // anything to do?
+      this.checkDone();
+    },
+    require: function(elt) {
+      var url = elt.src || elt.href;
+      // ensure we have a standard url that can be used
+      // reliably for deduping.
+      // TODO(sjmiles): ad-hoc
+      elt.__nodeUrl = url;
+      // deduplication
+      if (!this.dedupe(url, elt)) {
+        // fetch this resource
+        this.fetch(url, elt);
+      }
+    },
+    dedupe: function(url, elt) {
+      if (this.pending[url]) {
+        // add to list of nodes waiting for inUrl
+        this.pending[url].push(elt);
+        // don't need fetch
+        return true;
+      }
+      var resource;
+      if (this.cache[url]) {
+        this.onload(url, elt, this.cache[url]);
+        // finished this transaction
+        this.tail();
+        // don't need fetch
+        return true;
+      }
+      // first node waiting for inUrl
+      this.pending[url] = [elt];
+      // need fetch (not a dupe)
+      return false;
+    },
+    fetch: function(url, elt) {
+      flags.load && console.log('fetch', url, elt);
+      var receiveXhr = function(err, resource) {
+        this.receive(url, elt, err, resource);
+      }.bind(this);
+      xhr.load(url, receiveXhr);
+      // TODO(sorvell): blocked on
+      // https://code.google.com/p/chromium/issues/detail?id=257221
+      // xhr'ing for a document makes scripts in imports runnable; otherwise
+      // they are not; however, it requires that we have doctype=html in
+      // the import which is unacceptable. This is only needed on Chrome
+      // to avoid the bug above.
+      /*
+      if (isDocumentLink(elt)) {
+        xhr.loadDocument(url, receiveXhr);
+      } else {
+        xhr.load(url, receiveXhr);
+      }
+      */
+    },
+    receive: function(url, elt, err, resource) {
+      this.cache[url] = resource;
+      var $p = this.pending[url];
+      for (var i=0, l=$p.length, p; (i<l) && (p=$p[i]); i++) {
+        //if (!err) {
+          this.onload(url, p, resource);
+        //}
+        this.tail();
+      }
+      this.pending[url] = null;
+    },
+    tail: function() {
+      --this.inflight;
+      this.checkDone();
+    },
+    checkDone: function() {
+      if (!this.inflight) {
+        this.oncomplete();
+      }
+    }
+  };
+
+  xhr = xhr || {
+    async: true,
+    ok: function(request) {
+      return (request.status >= 200 && request.status < 300)
+          || (request.status === 304)
+          || (request.status === 0);
+    },
+    load: function(url, next, nextContext) {
+      var request = new XMLHttpRequest();
+      if (scope.flags.debug || scope.flags.bust) {
+        url += '?' + Math.random();
+      }
+      request.open('GET', url, xhr.async);
+      request.addEventListener('readystatechange', function(e) {
+        if (request.readyState === 4) {
+          next.call(nextContext, !xhr.ok(request) && request,
+              request.response || request.responseText, url);
+        }
+      });
+      request.send();
+      return request;
+    },
+    loadDocument: function(url, next, nextContext) {
+      this.load(url, next, nextContext).responseType = 'document';
+    }
+  };
+
+  // exports
+  scope.xhr = xhr;
+  scope.Loader = Loader;
+
+})(window.HTMLImports);
+
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+
+var IMPORT_LINK_TYPE = 'import';
+var flags = scope.flags;
+var isIe = /Trident/.test(navigator.userAgent);
+// TODO(sorvell): SD polyfill intrusion
+var mainDoc = window.ShadowDOMPolyfill ? 
+    window.ShadowDOMPolyfill.wrapIfNeeded(document) : document;
+
+// importParser
+// highlander object to manage parsing of imports
+// parses import related elements
+// and ensures proper parse order
+// parse order is enforced by crawling the tree and monitoring which elements
+// have been parsed; async parsing is also supported.
+
+// highlander object for parsing a document tree
+var importParser = {
+  // parse selectors for main document elements
+  documentSelectors: 'link[rel=' + IMPORT_LINK_TYPE + ']',
+  // parse selectors for import document elements
+  importsSelectors: [
+    'link[rel=' + IMPORT_LINK_TYPE + ']',
+    'link[rel=stylesheet]',
+    'style',
+    'script:not([type])',
+    'script[type="text/javascript"]'
+  ].join(','),
+  map: {
+    link: 'parseLink',
+    script: 'parseScript',
+    style: 'parseStyle'
+  },
+  // try to parse the next import in the tree
+  parseNext: function() {
+    var next = this.nextToParse();
+    if (next) {
+      this.parse(next);
+    }
+  },
+  parse: function(elt) {
+    if (this.isParsed(elt)) {
+      flags.parse && console.log('[%s] is already parsed', elt.localName);
+      return;
+    }
+    var fn = this[this.map[elt.localName]];
+    if (fn) {
+      this.markParsing(elt);
+      fn.call(this, elt);
+    }
+  },
+  // only 1 element may be parsed at a time; parsing is async so, each
+  // parsing implementation must inform the system that parsing is complete
+  // via markParsingComplete.
+  markParsing: function(elt) {
+    flags.parse && console.log('parsing', elt);
+    this.parsingElement = elt;
+  },
+  markParsingComplete: function(elt) {
+    elt.__importParsed = true;
+    if (elt.__importElement) {
+      elt.__importElement.__importParsed = true;
+    }
+    this.parsingElement = null;
+    flags.parse && console.log('completed', elt);
+    this.parseNext();
+  },
+  parseImport: function(elt) {
+    elt.import.__importParsed = true;
+    // TODO(sorvell): consider if there's a better way to do this;
+    // expose an imports parsing hook; this is needed, for example, by the
+    // CustomElements polyfill.
+    if (HTMLImports.__importsParsingHook) {
+      HTMLImports.__importsParsingHook(elt);
+    }
+    // fire load event
+    if (elt.__resource) {
+      elt.dispatchEvent(new CustomEvent('load', {bubbles: false}));    
+    } else {
+      elt.dispatchEvent(new CustomEvent('error', {bubbles: false}));
+    }
+    // TODO(sorvell): workaround for Safari addEventListener not working
+    // for elements not in the main document.
+    if (elt.__pending) {
+      var fn;
+      while (elt.__pending.length) {
+        fn = elt.__pending.shift();
+        if (fn) {
+          fn({target: elt});
+        }
+      }
+    }
+    this.markParsingComplete(elt);
+  },
+  parseLink: function(linkElt) {
+    if (nodeIsImport(linkElt)) {
+      this.parseImport(linkElt);
+    } else {
+      // make href absolute
+      linkElt.href = linkElt.href;
+      this.parseGeneric(linkElt);
+    }
+  },
+  parseStyle: function(elt) {
+    // TODO(sorvell): style element load event can just not fire so clone styles
+    var src = elt;
+    elt = cloneStyle(elt);
+    elt.__importElement = src;
+    this.parseGeneric(elt);
+  },
+  parseGeneric: function(elt) {
+    this.trackElement(elt);
+    document.head.appendChild(elt);
+  },
+  // tracks when a loadable element has loaded
+  trackElement: function(elt) {
+    var self = this;
+    var done = function() {
+      self.markParsingComplete(elt);
+    };
+    elt.addEventListener('load', done);
+    elt.addEventListener('error', done);
+
+    // NOTE: IE does not fire "load" event for styles that have already loaded
+    // This is in violation of the spec, so we try our hardest to work around it
+    if (isIe && elt.localName === 'style') {
+      var fakeLoad = false;
+      // If there's not @import in the textContent, assume it has loaded
+      if (elt.textContent.indexOf('@import') == -1) {
+        fakeLoad = true;
+      // if we have a sheet, we have been parsed
+      } else if (elt.sheet) {
+        fakeLoad = true;
+        var csr = elt.sheet.cssRules;
+        var len = csr ? csr.length : 0;
+        // search the rules for @import's
+        for (var i = 0, r; (i < len) && (r = csr[i]); i++) {
+          if (r.type === CSSRule.IMPORT_RULE) {
+            // if every @import has resolved, fake the load
+            fakeLoad = fakeLoad && Boolean(r.styleSheet);
+          }
+        }
+      }
+      // dispatch a fake load event and continue parsing
+      if (fakeLoad) {
+        elt.dispatchEvent(new CustomEvent('load', {bubbles: false}));
+      }
+    }
+  },
+  parseScript: function(scriptElt) {
+    // acquire code to execute
+    var code = (scriptElt.__resource || scriptElt.textContent).trim();
+    if (code) {
+      // calculate source map hint
+      var moniker = scriptElt.__nodeUrl;
+      if (!moniker) {
+        moniker = scriptElt.ownerDocument.baseURI;
+        // there could be more than one script this url
+        var tag = '[' + Math.floor((Math.random()+1)*1000) + ']';
+        // TODO(sjmiles): Polymer hack, should be pluggable if we need to allow 
+        // this sort of thing
+        var matches = code.match(/Polymer\(['"]([^'"]*)/);
+        tag = matches && matches[1] || tag;
+        // tag the moniker
+        moniker += '/' + tag + '.js';
+      }
+      // source map hint
+      code += "\n//# sourceURL=" + moniker + "\n";
+      // evaluate the code
+      scope.currentScript = scriptElt;
+      eval.call(window, code);
+      scope.currentScript = null;
+    }
+    this.markParsingComplete(scriptElt);
+  },
+  // determine the next element in the tree which should be parsed
+  nextToParse: function() {
+    return !this.parsingElement && this.nextToParseInDoc(mainDoc);
+  },
+  nextToParseInDoc: function(doc, link) {
+    var nodes = doc.querySelectorAll(this.parseSelectorsForNode(doc));
+    for (var i=0, l=nodes.length, p=0, n; (i<l) && (n=nodes[i]); i++) {
+      if (!this.isParsed(n)) {
+        if (this.hasResource(n)) {
+          return nodeIsImport(n) ? this.nextToParseInDoc(n.import, n) : n;
+        } else {
+          return;
+        }
+      }
+    }
+    // all nodes have been parsed, ready to parse import, if any
+    return link;
+  },
+  // return the set of parse selectors relevant for this node.
+  parseSelectorsForNode: function(node) {
+    var doc = node.ownerDocument || node;
+    return doc === mainDoc ? this.documentSelectors : this.importsSelectors;
+  },
+  isParsed: function(node) {
+    return node.__importParsed;
+  },
+  hasResource: function(node) {
+    if (nodeIsImport(node) && !node.import) {
+      return false;
+    }
+    if (node.localName === 'script' && node.src && !node.__resource) {
+      return false;
+    }
+    return true;
+  }
+};
+
+function nodeIsImport(elt) {
+  return (elt.localName === 'link') && (elt.rel === IMPORT_LINK_TYPE);
+}
+
+// style/stylesheet handling
+
+// clone style with proper path resolution for main document
+// NOTE: styles are the only elements that require direct path fixup.
+function cloneStyle(style) {
+  var clone = style.ownerDocument.createElement('style');
+  clone.textContent = style.textContent;
+  path.resolveUrlsInStyle(clone);
+  return clone;
+}
+
+// path fixup: style elements in imports must be made relative to the main 
+// document. We fixup url's in url() and @import.
+var CSS_URL_REGEXP = /(url\()([^)]*)(\))/g;
+var CSS_IMPORT_REGEXP = /(@import[\s]+(?!url\())([^;]*)(;)/g;
+
+var path = {
+  resolveUrlsInStyle: function(style) {
+    var doc = style.ownerDocument;
+    var resolver = doc.createElement('a');
+    style.textContent = this.resolveUrlsInCssText(style.textContent, resolver);
+    return style;  
+  },
+  resolveUrlsInCssText: function(cssText, urlObj) {
+    var r = this.replaceUrls(cssText, urlObj, CSS_URL_REGEXP);
+    r = this.replaceUrls(r, urlObj, CSS_IMPORT_REGEXP);
+    return r;
+  },
+  replaceUrls: function(text, urlObj, regexp) {
+    return text.replace(regexp, function(m, pre, url, post) {
+      var urlPath = url.replace(/["']/g, '');
+      urlObj.href = urlPath;
+      urlPath = urlObj.href;
+      return pre + '\'' + urlPath + '\'' + post;
+    });    
+  }
+}
+
+// exports
+scope.parser = importParser;
+scope.path = path;
+scope.isIE = isIe;
+
+})(HTMLImports);
+
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+
+var hasNative = ('import' in document.createElement('link'));
+var useNative = hasNative;
+var flags = scope.flags;
+var IMPORT_LINK_TYPE = 'import';
+
+// TODO(sorvell): SD polyfill intrusion
+var mainDoc = window.ShadowDOMPolyfill ? 
+    ShadowDOMPolyfill.wrapIfNeeded(document) : document;
+
+if (!useNative) {
+
+  // imports
+  var xhr = scope.xhr;
+  var Loader = scope.Loader;
+  var parser = scope.parser;
+
+  // importer
+  // highlander object to manage loading of imports
+
+  // for any document, importer:
+  // - loads any linked import documents (with deduping)
+  // for any import document, importer also:
+  // - loads text of external script tags
+
+  var importer = {
+    documents: {},
+    // nodes to load in the mian document
+    documentPreloadSelectors: 'link[rel=' + IMPORT_LINK_TYPE + ']',
+    // nodes to load in imports
+    importsPreloadSelectors: [
+        'link[rel=' + IMPORT_LINK_TYPE + ']',
+        'script[src]:not([type])',
+        'script[src][type="text/javascript"]'
+    ].join(','),
+    loadNode: function(node) {
+      importLoader.addNode(node);
+    },
+    // load all loadable elements within the parent element
+    loadSubtree: function(parent) {
+      var nodes = this.marshalNodes(parent);
+      // add these nodes to loader's queue
+      importLoader.addNodes(nodes);
+    },
+    marshalNodes: function(parent) {
+      // all preloadable nodes in inDocument
+      return parent.querySelectorAll(this.loadSelectorsForNode(parent));
+    },
+    // find the proper set of load selectors for a given node
+    loadSelectorsForNode: function(node) {
+      var doc = node.ownerDocument || node;
+      return doc === mainDoc ? this.documentPreloadSelectors :
+          this.importsPreloadSelectors;
+    },
+    loaded: function(url, elt, resource) {
+      flags.load && console.log('loaded', url, elt);
+      // store generic resource
+      // TODO(sorvell): fails for nodes inside <template>.content
+      // see https://code.google.com/p/chromium/issues/detail?id=249381.
+      elt.__resource = resource;
+      if (isDocumentLink(elt)) {
+        var doc = this.documents[url];
+        // if we've never seen a document at this url
+        if (!doc) {
+          // generate an HTMLDocument from data
+          doc = makeDocument(resource, url);
+          doc.__importLink = elt;
+          // TODO(sorvell): we cannot use MO to detect parsed nodes because
+          // SD polyfill does not report these as mutations.
+          this.bootDocument(doc);
+          // cache document
+          this.documents[url] = doc;
+        }
+        // don't store import record until we're actually loaded
+        // store document resource
+        elt.import = doc;
+      }
+      parser.parseNext();
+    },
+    bootDocument: function(doc) {
+      this.loadSubtree(doc);
+      this.observe(doc);
+      parser.parseNext();
+    },
+    loadedAll: function() {
+      parser.parseNext();
+    }
+  };
+
+  // loader singleton
+  var importLoader = new Loader(importer.loaded.bind(importer), 
+      importer.loadedAll.bind(importer));
+
+  function isDocumentLink(elt) {
+    return isLinkRel(elt, IMPORT_LINK_TYPE);
+  }
+
+  function isLinkRel(elt, rel) {
+    return elt.localName === 'link' && elt.getAttribute('rel') === rel;
+  }
+
+  function isScript(elt) {
+    return elt.localName === 'script';
+  }
+
+  function makeDocument(resource, url) {
+    // create a new HTML document
+    var doc = resource;
+    if (!(doc instanceof Document)) {
+      doc = document.implementation.createHTMLDocument(IMPORT_LINK_TYPE);
+    }
+    // cache the new document's source url
+    doc._URL = url;
+    // establish a relative path via <base>
+    var base = doc.createElement('base');
+    base.setAttribute('href', url);
+    // add baseURI support to browsers (IE) that lack it.
+    if (!doc.baseURI) {
+      doc.baseURI = url;
+    }
+    doc.head.appendChild(base);
+    // install HTML last as it may trigger CustomElement upgrades
+    // TODO(sjmiles): problem wrt to template boostrapping below,
+    // template bootstrapping must (?) come before element upgrade
+    // but we cannot bootstrap templates until they are in a document
+    // which is too late
+    if (!(resource instanceof Document)) {
+      // install html
+      doc.body.innerHTML = resource;
+    }
+    // TODO(sorvell): ideally this code is not aware of Template polyfill,
+    // but for now the polyfill needs help to bootstrap these templates
+    if (window.HTMLTemplateElement && HTMLTemplateElement.bootstrap) {
+      HTMLTemplateElement.bootstrap(doc);
+    }
+    return doc;
+  }
+} else {
+  // do nothing if using native imports
+  var importer = {};
+}
+
+// NOTE: We cannot polyfill document.currentScript because it's not possible
+// both to override and maintain the ability to capture the native value;
+// therefore we choose to expose _currentScript both when native imports
+// and the polyfill are in use.
+var currentScriptDescriptor = {
+  get: function() {
+    return HTMLImports.currentScript || document.currentScript;
+  },
+  configurable: true
+};
+
+Object.defineProperty(document, '_currentScript', currentScriptDescriptor);
+Object.defineProperty(mainDoc, '_currentScript', currentScriptDescriptor);
+
+// Polyfill document.baseURI for browsers without it.
+if (!document.baseURI) {
+  var baseURIDescriptor = {
+    get: function() {
+      return window.location.href;
+    },
+    configurable: true
+  };
+
+  Object.defineProperty(document, 'baseURI', baseURIDescriptor);
+  Object.defineProperty(mainDoc, 'baseURI', baseURIDescriptor);
+}
+
+// call a callback when all HTMLImports in the document at call (or at least
+//  document ready) time have loaded.
+// 1. ensure the document is in a ready state (has dom), then 
+// 2. watch for loading of imports and call callback when done
+function whenImportsReady(callback, doc) {
+  doc = doc || mainDoc;
+  // if document is loading, wait and try again
+  whenDocumentReady(function() {
+    watchImportsLoad(callback, doc);
+  }, doc);
+}
+
+// call the callback when the document is in a ready state (has dom)
+var requiredReadyState = HTMLImports.isIE ? 'complete' : 'interactive';
+var READY_EVENT = 'readystatechange';
+function isDocumentReady(doc) {
+  return (doc.readyState === 'complete' ||
+      doc.readyState === requiredReadyState);
+}
+
+// call <callback> when we ensure the document is in a ready state
+function whenDocumentReady(callback, doc) {
+  if (!isDocumentReady(doc)) {
+    var checkReady = function() {
+      if (doc.readyState === 'complete' || 
+          doc.readyState === requiredReadyState) {
+        doc.removeEventListener(READY_EVENT, checkReady);
+        whenDocumentReady(callback, doc);
+      }
+    }
+    doc.addEventListener(READY_EVENT, checkReady);
+  } else if (callback) {
+    callback();
+  }
+}
+
+// call <callback> when we ensure all imports have loaded
+function watchImportsLoad(callback, doc) {
+  var imports = doc.querySelectorAll('link[rel=import]');
+  var loaded = 0, l = imports.length;
+  function checkDone(d) { 
+    if (loaded == l) {
+      // go async to ensure parser isn't stuck on a script tag
+      requestAnimationFrame(callback);
+    }
+  }
+  function loadedImport(e) {
+    loaded++;
+    checkDone();
+  }
+  if (l) {
+    for (var i=0, imp; (i<l) && (imp=imports[i]); i++) {
+      if (isImportLoaded(imp)) {
+        loadedImport.call(imp);
+      } else {
+        imp.addEventListener('load', loadedImport);
+        imp.addEventListener('error', loadedImport);
+      }
+    }
+  } else {
+    checkDone();
+  }
+}
+
+function isImportLoaded(link) {
+  return useNative ? (link.import && (link.import.readyState !== 'loading')) :
+      link.__importParsed;
+}
+
+// exports
+scope.hasNative = hasNative;
+scope.useNative = useNative;
+scope.importer = importer;
+scope.whenImportsReady = whenImportsReady;
+scope.IMPORT_LINK_TYPE = IMPORT_LINK_TYPE;
+scope.isImportLoaded = isImportLoaded;
+scope.importLoader = importLoader;
+
+})(window.HTMLImports);
+
+ /*
+Copyright 2013 The Polymer Authors. All rights reserved.
+Use of this source code is governed by a BSD-style
+license that can be found in the LICENSE file.
+*/
+
+(function(scope){
+
+var IMPORT_LINK_TYPE = scope.IMPORT_LINK_TYPE;
+var importSelector = 'link[rel=' + IMPORT_LINK_TYPE + ']';
+var importer = scope.importer;
+
+// we track mutations for addedNodes, looking for imports
+function handler(mutations) {
+  for (var i=0, l=mutations.length, m; (i<l) && (m=mutations[i]); i++) {
+    if (m.type === 'childList' && m.addedNodes.length) {
+      addedNodes(m.addedNodes);
+    }
+  }
+}
+
+// find loadable elements and add them to the importer
+function addedNodes(nodes) {
+  for (var i=0, l=nodes.length, n; (i<l) && (n=nodes[i]); i++) {
+    if (shouldLoadNode(n)) {
+      importer.loadNode(n);
+    }
+    if (n.children && n.children.length) {
+      addedNodes(n.children);
+    }
+  }
+}
+
+function shouldLoadNode(node) {
+  return (node.nodeType === 1) && matches.call(node,
+      importer.loadSelectorsForNode(node));
+}
+
+// x-plat matches
+var matches = HTMLElement.prototype.matches || 
+    HTMLElement.prototype.matchesSelector || 
+    HTMLElement.prototype.webkitMatchesSelector ||
+    HTMLElement.prototype.mozMatchesSelector ||
+    HTMLElement.prototype.msMatchesSelector;
+
+var observer = new MutationObserver(handler);
+
+// observe the given root for loadable elements
+function observe(root) {
+  observer.observe(root, {childList: true, subtree: true});
+}
+
+// exports
+// TODO(sorvell): factor so can put on scope
+scope.observe = observe;
+importer.observe = observe;
+
+})(HTMLImports);
+
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+(function(){
+
+// bootstrap
+
+// IE shim for CustomEvent
+if (typeof window.CustomEvent !== 'function') {
+  window.CustomEvent = function(inType, dictionary) {
+     var e = document.createEvent('HTMLEvents');
+     e.initEvent(inType,
+        dictionary.bubbles === false ? false : true,
+        dictionary.cancelable === false ? false : true,
+        dictionary.detail);
+     return e;
+  };
+}
+
+// TODO(sorvell): SD polyfill intrusion
+var doc = window.ShadowDOMPolyfill ? 
+    window.ShadowDOMPolyfill.wrapIfNeeded(document) : document;
+
+// Fire the 'HTMLImportsLoaded' event when imports in document at load time 
+// have loaded. This event is required to simulate the script blocking 
+// behavior of native imports. A main document script that needs to be sure
+// imports have loaded should wait for this event.
+HTMLImports.whenImportsReady(function() {
+  HTMLImports.ready = true;
+  HTMLImports.readyTime = new Date().getTime();
+  doc.dispatchEvent(
+    new CustomEvent('HTMLImportsLoaded', {bubbles: true})
+  );
+});
+
+
+// no need to bootstrap the polyfill when native imports is available.
+if (!HTMLImports.useNative) {
+  function bootstrap() {
+    HTMLImports.importer.bootDocument(doc);
+  }
+    
+  // TODO(sorvell): SD polyfill does *not* generate mutations for nodes added
+  // by the parser. For this reason, we must wait until the dom exists to 
+  // bootstrap.
+  if (document.readyState === 'complete' ||
+      (document.readyState === 'interactive' && !window.attachEvent)) {
+    bootstrap();
+  } else {
+    document.addEventListener('DOMContentLoaded', bootstrap);
+  }
+}
+
+})();
+
+/*
+ * Copyright 2013 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
 window.CustomElements = window.CustomElements || {flags:{}};
  /*
 Copyright 2013 The Polymer Authors. All rights reserved.
@@ -9220,12 +10226,11 @@ function insertedNode(node) {
   }
 }
 
-
-// TODO(sorvell): on platforms without MutationObserver, mutations may not be 
+// TODO(sorvell): on platforms without MutationObserver, mutations may not be
 // reliable and therefore attached/detached are not reliable.
 // To make these callbacks less likely to fail, we defer all inserts and removes
-// to give a chance for elements to be inserted into dom. 
-// This ensures attachedCallback fires for elements that are created and 
+// to give a chance for elements to be inserted into dom.
+// This ensures attachedCallback fires for elements that are created and
 // immediately added to dom.
 var hasPolyfillMutations = (!window.MutationObserver ||
     (window.MutationObserver === window.JsMutationObserver));
@@ -9301,7 +10306,6 @@ function removedNode(node) {
     removed(e);
   });
 }
-
 
 function removed(element) {
   if (hasPolyfillMutations) {
@@ -9458,6 +10462,7 @@ scope.watchShadow = watchShadow;
 scope.upgradeDocumentTree = upgradeDocumentTree;
 scope.upgradeAll = addedNode;
 scope.upgradeSubtree = addedSubtree;
+scope.insertedNode = insertedNode;
 
 scope.observeDocument = observeDocument;
 scope.upgradeDocument = upgradeDocument;
@@ -9497,7 +10502,7 @@ var hasNative = Boolean(document.registerElement);
 // TODO(sorvell): See https://github.com/Polymer/polymer/issues/399
 // we'll address this by defaulting to CE polyfill in the presence of the SD
 // polyfill. This will avoid spamming excess attached/detached callbacks.
-// If there is a compelling need to run CE native with SD polyfill, 
+// If there is a compelling need to run CE native with SD polyfill,
 // we'll need to fix this issue.
 var useNative = !flags.register && hasNative && !window.ShadowDOMPolyfill;
 
@@ -9509,13 +10514,14 @@ if (useNative) {
   // exports
   scope.registry = {};
   scope.upgradeElement = nop;
-  
+
   scope.watchShadow = nop;
   scope.upgrade = nop;
   scope.upgradeAll = nop;
   scope.upgradeSubtree = nop;
   scope.observeDocument = nop;
   scope.upgradeDocument = nop;
+  scope.upgradeDocumentTree = nop;
   scope.takeRecords = nop;
 
 } else {
@@ -9691,11 +10697,12 @@ if (useNative) {
     implement(element, definition);
     // flag as upgraded
     element.__upgraded__ = true;
-    // there should never be a shadow root on element at this point
-    // we require child nodes be upgraded before `created`
-    scope.upgradeSubtree(element);
     // lifecycle management
     created(element);
+    // attachedCallback fires in tree order, call before recursing
+    scope.insertedNode(element);
+    // there should never be a shadow root on element at this point
+    scope.upgradeSubtree(element);
     // OUTPUT
     return element;
   }
@@ -9801,16 +10808,39 @@ if (useNative) {
     // error check it, or perhaps there should only ever be one argument
     var definition = getRegisteredDefinition(typeExtension || tag);
     if (definition) {
-      return new definition.ctor();
+      if (tag == definition.tag && typeExtension == definition.is) {
+        return new definition.ctor();
+      }
+      // Handle empty string for type extension.
+      if (!typeExtension && !definition.is) {
+        return new definition.ctor();
+      }
     }
-    return domCreateElement(tag);
+
+    if (typeExtension) {
+      var element = createElement(tag);
+      element.setAttribute('is', typeExtension);
+      return element;
+    }
+    var element = domCreateElement(tag);
+    // Custom tags should be HTMLElements even if not upgraded.
+    if (tag.indexOf('-') >= 0) {
+      implement(element, HTMLElement);
+    }
+    return element;
   }
 
   function upgradeElement(element) {
     if (!element.__upgraded__ && (element.nodeType === Node.ELEMENT_NODE)) {
-      var type = element.getAttribute('is') || element.localName;
-      var definition = getRegisteredDefinition(type);
-      return definition && upgrade(element, definition);
+      var is = element.getAttribute('is');
+      var definition = getRegisteredDefinition(is || element.localName);
+      if (definition) {
+        if (is && definition.tag == element.localName) {
+          return upgrade(element, definition);
+        } else if (!is && !definition.extends) {
+          return upgrade(element, definition);
+        }
+      }
     }
   }
 
@@ -9840,7 +10870,7 @@ if (useNative) {
 
   /**
    * Upgrade an element to a custom element. Upgrading an element
-   * causes the custom prototype to be applied, an `is` attribute 
+   * causes the custom prototype to be applied, an `is` attribute
    * to be attached (as needed), and invocation of the `readyCallback`.
    * `upgrade` does nothing if the element is already upgraded, or
    * if it matches no registered custom tag name.
@@ -9954,6 +10984,13 @@ function bootstrap() {
     document.dispatchEvent(
       new CustomEvent('WebComponentsReady', {bubbles: true})
     );
+
+    // install upgrade hook if HTMLImports are available
+    if (window.HTMLImports) {
+      HTMLImports.__importsParsingHook = function(elt) {
+        CustomElements.parser.parse(elt.import);
+      }
+    }
   });
 }
 
@@ -10023,39 +11060,6 @@ if (window.ShadowDOMPolyfill) {
 })();
 
 /*
- * Copyright 2013 The Polymer Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style
- * license that can be found in the LICENSE file.
- */
-(function(scope) {
-
-var iterations = 0;
-var callbacks = [];
-var twiddle = document.createTextNode('');
-
-function endOfMicrotask(callback) {
-  twiddle.textContent = iterations++;
-  callbacks.push(callback);
-}
-
-function atEndOfMicrotask() {
-  while (callbacks.length) {
-    callbacks.shift()();
-  }
-}
-
-new (window.MutationObserver || JsMutationObserver)(atEndOfMicrotask)
-  .observe(twiddle, {characterData: true})
-  ;
-
-// exports
-
-scope.endOfMicrotask = endOfMicrotask;
-
-})(Platform);
-
-
-/*
  * Copyright 2014 The Polymer Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style
  * license that can be found in the LICENSE file.
@@ -10063,41 +11067,18 @@ scope.endOfMicrotask = endOfMicrotask;
 (function(scope) {
 
 var STYLE_SELECTOR = 'style';
-var STYLE_LOADABLE_MATCH = '@import';
+
+var urlResolver = scope.urlResolver;
 
 var loader = {
-  loadStyles: function(root, callback) {
-    var styles = this.findLoadableStyles(root);
-    if (styles.length) {
-      if (window.ShadowDOMPolyfill) {
-        this.polyfillLoadStyles(styles, callback);
-      } else {
-        this.platformLoadStyles(styles, callback);
-      }
-    } else if (callback) {
-      callback();
-    }
-  },
-  findLoadableStyles: function(root) {
-    var loadables = [];
-    if (root) {
-      var s$ = root.querySelectorAll(STYLE_SELECTOR);
-      for (var i=0, l=s$.length, s; (i<l) && (s=s$[i]); i++) {
-        if (s.textContent.match(STYLE_LOADABLE_MATCH)) {
-          loadables.push(s);
-        }
-      }
-    }
-    return loadables;
-  },
-  platformLoadStyles: function(styles, callback) {
+  cacheStyles: function(styles, callback) {
     var css = [];
     for (var i=0, l=styles.length, s; (i<l) && (s=styles[i]); i++) {
       css.push(s.textContent);
     }
-    loadCssText(css.join('\n'), callback);
+    cacheCssText(css.join('\n'), callback);
   },
-  polyfillLoadStyles: function(styles, callback) {
+  xhrStyles: function(styles, callback) {
     var loaded=0, l = styles.length;
     // called in the context of the style
     function loadedStyle(style) {
@@ -10108,7 +11089,7 @@ var loader = {
       }
     }
     for (var i=0, s; (i<l) && (s=styles[i]); i++) {
-      polyfillLoadStyle(s, loadedStyle);
+      xhrLoadStyle(s, loadedStyle);
     }
   }
 };
@@ -10119,7 +11100,7 @@ preloadElement.style.display = 'none';
 var preloadRoot = preloadElement.createShadowRoot();
 document.head.appendChild(preloadElement);
 
-function loadCssText(cssText, callback) {
+function cacheCssText(cssText, callback) {
   var style = createStyleElement(cssText);
   if (callback) {
     style.addEventListener('load', callback);
@@ -10136,45 +11117,16 @@ function createStyleElement(cssText, scope) {
   return style;
 }
 
-// TODO(sorvell): integrate a real URL polyfill, this is cribbed from
-// https://github.com/arv/DOM-URL-Polyfill/blob/master/src/url.js.
-// NOTE: URL seems difficult to polyfill since chrome and safari implement
-// it but only chrome's appears to work.
-function getUrl(base, url) {
-  url = url || ''
-  var doc = document.implementation.createHTMLDocument('');
-  if (base) {
-    var baseElement = doc.createElement('base');
-    baseElement.href = base;
-    doc.head.appendChild(baseElement);
-  }
-  var anchorElement = doc.createElement('a');
-  anchorElement.href = url;
-  doc.body.appendChild(anchorElement);
-  return anchorElement;
-}
-
-// TODO(sorvell): factor path fixup for easier reuse; parts are currently
-// needed by HTMLImports and ShadowDOM style shimming.
-function resolveUrlsInCssText(cssText, url) {
-  return HTMLImports.path.resolveUrlsInCssText(cssText,
-      getUrl(url));
-}
-
-function resolveUrlsInStyle(style) {
-  return HTMLImports.path.resolveUrlsInStyle(style);
-}
-
 // TODO(sorvell): use a common loader shared with HTMLImports polyfill
 // currently, this just loads the first @import per style element 
 // and does not recurse into loaded elements; we'll address this with a 
 // generalized loader that's built out of the one in the HTMLImports polyfill.
 // polyfill the loading of a style element's @import via xhr
-function polyfillLoadStyle(style, callback) {
+function xhrLoadStyle(style, callback) {
   HTMLImports.xhr.load(atImportUrlFromStyle(style), function (err, resource,
       url) {
     replaceAtImportWithCssText(this, url, resource);
-    this.textContent = resolveUrlsInCssText(this.textContent, url);
+    this.textContent = urlResolver.resolveCssText(this.textContent, url);
     callback && callback(this);
   }, style);
 }
@@ -10193,8 +11145,6 @@ function replaceAtImportWithCssText(style, url, cssText) {
 }
 
 // exports
-loader.resolveUrlsInCssText = resolveUrlsInCssText;
-loader.resolveUrlsInStyle = resolveUrlsInStyle;
 scope.loader = loader;
 
 })(window.Platform);
@@ -10423,8 +11373,10 @@ scope.loader = loader;
     // is to call initMouseEvent with a buttonArg value of -1.
     //
     // This is fixed with DOM Level 4's use of buttons
-    var buttons = inDict.buttons;
-    if (buttons === undefined) {
+    var buttons;
+    if (inDict.buttons || HAS_BUTTONS) {
+      buttons = inDict.buttons;
+    } else {
       switch (inDict.which) {
         case 1: buttons = 1; break;
         case 2: buttons = 4; break;
@@ -10621,7 +11573,7 @@ scope.loader = loader;
     0,
     null,
     // DOM Level 3
-    undefined,
+    0,
     // PointerEvent
     0,
     0,
@@ -10638,6 +11590,8 @@ scope.loader = loader;
     null,
     0
   ];
+
+  var HAS_SVG_INSTANCE = (typeof SVGElementInstance !== 'undefined');
 
   /**
    * This module is for normalizing events. Mouse and Touch events will be
@@ -10700,12 +11654,15 @@ scope.loader = loader;
     },
     // EVENTS
     down: function(inEvent) {
+      inEvent.bubbles = true;
       this.fireEvent('pointerdown', inEvent);
     },
     move: function(inEvent) {
+      inEvent.bubbles = true;
       this.fireEvent('pointermove', inEvent);
     },
     up: function(inEvent) {
+      inEvent.bubbles = true;
       this.fireEvent('pointerup', inEvent);
     },
     enter: function(inEvent) {
@@ -10725,19 +11682,20 @@ scope.loader = loader;
       this.fireEvent('pointerout', inEvent);
     },
     cancel: function(inEvent) {
+      inEvent.bubbles = true;
       this.fireEvent('pointercancel', inEvent);
     },
     leaveOut: function(event) {
+      this.out(event);
       if (!this.contains(event.target, event.relatedTarget)) {
         this.leave(event);
       }
-      this.out(event);
     },
     enterOver: function(event) {
+      this.over(event);
       if (!this.contains(event.target, event.relatedTarget)) {
         this.enter(event);
       }
-      this.over(event);
     },
     // LISTENER LOGIC
     eventHandler: function(inEvent) {
@@ -10810,6 +11768,14 @@ scope.loader = loader;
       for (var i = 0; i < CLONE_PROPS.length; i++) {
         p = CLONE_PROPS[i];
         eventCopy[p] = inEvent[p] || CLONE_DEFAULTS[i];
+        // Work around SVGInstanceElement shadow tree
+        // Return the <use> element that is represented by the instance for Safari, Chrome, IE.
+        // This is the behavior implemented by Firefox.
+        if (HAS_SVG_INSTANCE && (p === 'target' || p === 'relatedTarget')) {
+          if (eventCopy[p] instanceof SVGElementInstance) {
+            eventCopy[p] = eventCopy[p].correspondingUseElement;
+          }
+        }
       }
       // keep the semantics of preventDefault
       if (inEvent.preventDefault) {
@@ -11346,6 +12312,7 @@ scope.loader = loader;
         outTarget: inPointer.target
       });
       dispatcher.over(inPointer);
+      dispatcher.enter(inPointer);
       dispatcher.down(inPointer);
     },
     touchmove: function(inEvent) {
@@ -11395,6 +12362,7 @@ scope.loader = loader;
       if (!this.scrolling) {
         dispatcher.up(inPointer);
         dispatcher.out(inPointer);
+        dispatcher.leave(inPointer);
       }
       this.cleanUpPointer(inPointer);
     },
@@ -11404,6 +12372,7 @@ scope.loader = loader;
     cancelOut: function(inPointer) {
       dispatcher.cancel(inPointer);
       dispatcher.out(inPointer);
+      dispatcher.leave(inPointer);
       this.cleanUpPointer(inPointer);
     },
     cleanUpPointer: function(inPointer) {
@@ -12915,6 +13884,9 @@ PointerGestureEvent.prototype.preventTap = function() {
       case 'select-multiple':
       case 'select-one':
         return 'change';
+      case 'range':
+        if (/Trident|MSIE/.test(navigator.userAgent))
+          return 'change';
       default:
         return 'input';
     }
@@ -13433,6 +14405,15 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   }
 
+  var templateObserver;
+  if (typeof MutationObserver == 'function') {
+    templateObserver = new MutationObserver(function(records) {
+      for (var i = 0; i < records.length; i++) {
+        records[i].target.refChanged_();
+      }
+    });
+  }
+
   /**
    * Ensures proper API and content model for template elements.
    * @param {HTMLTemplateElement} opt_instanceRef The template element which
@@ -13536,6 +14517,25 @@ PointerGestureEvent.prototype.preventTap = function() {
   }
 
   mixin(HTMLTemplateElement.prototype, {
+    bind: function(name, value, oneTime) {
+      if (name != 'ref')
+        return Element.prototype.bind.call(this, name, value, oneTime);
+
+      var self = this;
+      var ref = oneTime ? value : value.open(function(ref) {
+        self.setAttribute('ref', ref);
+        self.refChanged_();
+      });
+
+      this.setAttribute('ref', ref);
+      this.refChanged_();
+      if (oneTime)
+        return;
+
+      this.unbind('ref');
+      return this.bindings.ref = value;
+    },
+
     processBindingDirectives_: function(directives) {
       if (this.iterator_)
         this.iterator_.closeDeps();
@@ -13557,6 +14557,12 @@ PointerGestureEvent.prototype.preventTap = function() {
       }
 
       this.iterator_.updateDependencies(directives, this.model_);
+
+      if (templateObserver) {
+        templateObserver.observe(this, { attributes: true,
+                                         attributeFilter: ['ref'] });
+      }
+
       return this.iterator_;
     },
 
@@ -13565,7 +14571,9 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (bindingDelegate)
         delegate_ = this.newDelegate_(bindingDelegate);
 
-      var content = this.ref.content;
+      if (!this.refContent_)
+        this.refContent_ = this.ref_.content;
+      var content = this.refContent_;
       var map = this.bindingMap_;
       if (!map || map.content !== content) {
         // TODO(rafaelw): Setup a MutationObserver on content to detect
@@ -13617,6 +14625,27 @@ PointerGestureEvent.prototype.preventTap = function() {
       return this.delegate_ && this.delegate_.raw;
     },
 
+    refChanged_: function() {
+      if (!this.iterator_ || this.refContent_ === this.ref_.content)
+        return;
+
+      this.refContent_ = undefined;
+      this.iterator_.valueChanged();
+      this.iterator_.updateIteratedValue();
+    },
+
+    clear: function() {
+      this.model_ = undefined;
+      this.delegate_ = undefined;
+      this.bindings_ = undefined;
+      this.refContent_ = undefined;
+      if (!this.iterator_)
+        return;
+      this.iterator_.valueChanged();
+      this.iterator_.close()
+      this.iterator_ = undefined;
+    },
+
     setDelegate_: function(delegate) {
       this.delegate_ = delegate;
       this.bindingMap_ = undefined;
@@ -13653,10 +14682,15 @@ PointerGestureEvent.prototype.preventTap = function() {
     // make sense to issue a warning or even throw if the template is already
     // "activated", since this would be a strange thing to do.
     set bindingDelegate(bindingDelegate) {
+      if (this.delegate_) {
+        throw Error('Template must be cleared before a new bindingDelegate ' +
+                    'can be assigned');
+      }
+
       this.setDelegate_(this.newDelegate_(bindingDelegate));
     },
 
-    get ref() {
+    get ref_() {
       var ref = searchRefId(this, this.getAttribute('ref'));
       if (!ref)
         ref = this.instanceRef_;
@@ -13664,7 +14698,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (!ref)
         return this;
 
-      var nextRef = ref.ref;
+      var nextRef = ref.ref_;
       return nextRef ? nextRef : ref;
     }
   });
@@ -15400,6 +16434,9 @@ PointerGestureEvent.prototype.preventTap = function() {
     },
 
     setValue: function(model, newValue) {
+      if (this.path.length == 1);
+        model = findScope(model, this.path[0]);
+
       return this.path.setValueFrom(model, newValue);
     }
   };
@@ -15781,16 +16818,70 @@ PointerGestureEvent.prototype.preventTap = function() {
            name[2] === '-';
   }
 
-  function prepareEventBinding(path, name) {
+  var mixedCaseEventTypes = {};
+  [
+    'webkitAnimationStart',
+    'webkitAnimationEnd',
+    'webkitTransitionEnd',
+    'DOMFocusOut',
+    'DOMFocusIn',
+    'DOMMouseScroll'
+  ].forEach(function(e) {
+    mixedCaseEventTypes[e.toLowerCase()] = e;
+  });
+
+  var parentScopeName = '@' + Math.random().toString(36).slice(2);
+
+  // Single ident paths must bind directly to the appropriate scope object.
+  // I.e. Pushed values in two-bindings need to be assigned to the actual model
+  // object.
+  function findScope(model, prop) {
+    while (model[parentScopeName] &&
+           !Object.prototype.hasOwnProperty.call(model, prop)) {
+      model = model[parentScopeName];
+    }
+
+    return model;
+  }
+
+  function resolveEventReceiver(model, path, node) {
+    if (path.length == 0)
+      return undefined;
+
+    if (path.length == 1)
+      return findScope(model, path[0]);
+
+    for (var i = 0; model != null && i < path.length - 1; i++) {
+      model = model[path[i]];
+    }
+
+    return model;
+  }
+
+  function prepareEventBinding(path, name, polymerExpressions) {
     var eventType = name.substring(3);
+    eventType = mixedCaseEventTypes[eventType] || eventType;
 
     return function(model, node, oneTime) {
-      var fn = path.getValueFrom(model);
+      var fn, receiver, handler;
+      if (typeof polymerExpressions.resolveEventHandler == 'function') {
+        handler = function(e) {
+          fn = fn || polymerExpressions.resolveEventHandler(model, path, node);
+          fn(e, e.detail, e.currentTarget);
 
-      function handler() {
-        if (!oneTime)
-          fn = path.getValueFrom(model);
-        fn.apply(model, arguments);
+          if (Platform && typeof Platform.flush == 'function')
+            Platform.flush();
+        };
+      } else {
+        handler = function(e) {
+          fn = fn || path.getValueFrom(model);
+          receiver = receiver || resolveEventReceiver(model, path, node);
+
+          fn.apply(receiver, [e, e.detail, e.currentTarget]);
+
+          if (Platform && typeof Platform.flush == 'function')
+            Platform.flush();
+        };
       }
 
       node.addEventListener(eventType, handler);
@@ -15845,18 +16936,29 @@ PointerGestureEvent.prototype.preventTap = function() {
     },
 
     prepareBinding: function(pathString, name, node) {
+      var path = Path.get(pathString);
       if (isEventHandler(name)) {
-        var path = Path.get(pathString);
         if (!path.valid) {
           console.error('on-* bindings must be simple path expressions');
           return;
         }
 
-        return prepareEventBinding(path, name);
+        return prepareEventBinding(path, name, this);
       }
 
-      if (Path.get(pathString).valid)
+      if (path.valid) {
+        if (path.length == 1) {
+          return function(model, node, oneTime) {
+            if (oneTime)
+              return path.getValueFrom(model);
+
+            var scope = findScope(model, path[0]);
+            return new PathObserver(scope, path);
+          }
+        }
+
         return; // bail out early if pathString is simple path.
+      }
 
       return prepareBinding(pathString, name, node, this);
     },
@@ -15870,9 +16972,13 @@ PointerGestureEvent.prototype.preventTap = function() {
           template.templateInstance.model :
           template.model;
 
+      var indexName = template.polymerExpressionIndexIdent_;
+
       return function(model) {
         var scope = Object.create(parentScope);
         scope[scopeName] = model;
+        scope[indexName] = undefined;
+        scope[parentScopeName] = parentScope;
         return scope;
       };
     }
@@ -15880,7 +16986,9 @@ PointerGestureEvent.prototype.preventTap = function() {
 
   global.PolymerExpressions = PolymerExpressions;
   if (global.exposeGetExpression)
-    global.getExpression_ = getExpression
+    global.getExpression_ = getExpression;
+
+  global.PolymerExpressions.prepareEventBinding = prepareEventBinding;
 })(window);
 
 /*
@@ -15919,7 +17027,6 @@ window.addEventListener('WebComponentsReady', function() {
     scope.flushPoll = setInterval(flush, FLUSH_POLL_INTERVAL);
   }
 });
-
 
 if (window.CustomElements && !CustomElements.useNative) {
   var originalImportNode = Document.prototype.importNode;
