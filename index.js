@@ -5141,6 +5141,51 @@ window.ShadowDOMPolyfill = {};
   scope.wrappers.Option = Option;
 })(window.ShadowDOMPolyfill);
 
+// Copyright 2014 The Polymer Authors. All rights reserved.
+// Use of this source code is goverened by a BSD-style
+// license that can be found in the LICENSE file.
+
+(function(scope) {
+  'use strict';
+
+  var HTMLElement = scope.wrappers.HTMLElement;
+  var mixin = scope.mixin;
+  var registerWrapper = scope.registerWrapper;
+  var unwrap = scope.unwrap;
+  var wrap = scope.wrap;
+
+  var OriginalHTMLSelectElement = window.HTMLSelectElement;
+
+  function HTMLSelectElement(node) {
+    HTMLElement.call(this, node);
+  }
+  HTMLSelectElement.prototype = Object.create(HTMLElement.prototype);
+  mixin(HTMLSelectElement.prototype, {
+    add: function(element, before) {
+      if (typeof before === 'object')  // also includes null
+        before = unwrap(before);
+      unwrap(this).add(unwrap(element), before);
+    },
+
+    remove: function(indexOrNode) {
+      // Spec only allows index but implementations allow index or node.
+      // remove() is also allowed which is same as remove(undefined)
+      if (typeof indexOrNode === 'object')
+        indexOrNode = unwrap(indexOrNode);
+      unwrap(this).remove(indexOrNode);
+    },
+
+    get form() {
+      return wrap(unwrap(this).form);
+    }
+  });
+
+  registerWrapper(OriginalHTMLSelectElement, HTMLSelectElement,
+                  document.createElement('select'));
+
+  scope.wrappers.HTMLSelectElement = HTMLSelectElement;
+})(window.ShadowDOMPolyfill);
+
 // Copyright 2013 The Polymer Authors. All rights reserved.
 // Use of this source code is goverened by a BSD-style
 // license that can be found in the LICENSE file.
@@ -5706,7 +5751,10 @@ window.ShadowDOMPolyfill = {};
   }
 
   function getDistributedChildNodes(insertionPoint) {
-    return distributedChildNodesTable.get(insertionPoint);
+    var rv = distributedChildNodesTable.get(insertionPoint);
+    if (!rv)
+      distributedChildNodesTable.set(insertionPoint, rv = []);
+    return rv;
   }
 
   function getChildNodesSnapshot(node) {
@@ -6277,7 +6325,7 @@ window.ShadowDOMPolyfill = {};
     'HTMLObjectElement',
     // HTMLOptionElement is handled in HTMLOptionElement.js
     'HTMLOutputElement',
-    'HTMLSelectElement',
+    // HTMLSelectElement is handled in HTMLSelectElement.js
     'HTMLTextAreaElement',
   ];
 
@@ -6768,38 +6816,44 @@ window.ShadowDOMPolyfill = {};
   // for.
   var elements = {
     'a': 'HTMLAnchorElement',
-
     // Do not create an applet element by default since it shows a warning in
     // IE.
     // https://github.com/Polymer/polymer/issues/217
     // 'applet': 'HTMLAppletElement',
-
     'area': 'HTMLAreaElement',
-    'br': 'HTMLBRElement',
+    'audio': 'HTMLAudioElement',
     'base': 'HTMLBaseElement',
     'body': 'HTMLBodyElement',
+    'br': 'HTMLBRElement',
     'button': 'HTMLButtonElement',
+    'canvas': 'HTMLCanvasElement',
+    'caption': 'HTMLTableCaptionElement',
+    'col': 'HTMLTableColElement',
     // 'command': 'HTMLCommandElement',  // Not fully implemented in Gecko.
-    'dl': 'HTMLDListElement',
-    'datalist': 'HTMLDataListElement',
+    'content': 'HTMLContentElement',
     'data': 'HTMLDataElement',
+    'datalist': 'HTMLDataListElement',
+    'del': 'HTMLModElement',
     'dir': 'HTMLDirectoryElement',
     'div': 'HTMLDivElement',
+    'dl': 'HTMLDListElement',
     'embed': 'HTMLEmbedElement',
     'fieldset': 'HTMLFieldSetElement',
     'font': 'HTMLFontElement',
     'form': 'HTMLFormElement',
     'frame': 'HTMLFrameElement',
     'frameset': 'HTMLFrameSetElement',
-    'hr': 'HTMLHRElement',
-    'head': 'HTMLHeadElement',
     'h1': 'HTMLHeadingElement',
+    'head': 'HTMLHeadElement',
+    'hr': 'HTMLHRElement',
     'html': 'HTMLHtmlElement',
     'iframe': 'HTMLIFrameElement',
+    'img': 'HTMLImageElement',
     'input': 'HTMLInputElement',
-    'li': 'HTMLLIElement',
+    'keygen': 'HTMLKeygenElement',
     'label': 'HTMLLabelElement',
     'legend': 'HTMLLegendElement',
+    'li': 'HTMLLIElement',
     'link': 'HTMLLinkElement',
     'map': 'HTMLMapElement',
     'marquee': 'HTMLMarqueeElement',
@@ -6807,9 +6861,8 @@ window.ShadowDOMPolyfill = {};
     'menuitem': 'HTMLMenuItemElement',
     'meta': 'HTMLMetaElement',
     'meter': 'HTMLMeterElement',
-    'del': 'HTMLModElement',
-    'ol': 'HTMLOListElement',
     'object': 'HTMLObjectElement',
+    'ol': 'HTMLOListElement',
     'optgroup': 'HTMLOptGroupElement',
     'option': 'HTMLOptionElement',
     'output': 'HTMLOutputElement',
@@ -6820,23 +6873,23 @@ window.ShadowDOMPolyfill = {};
     'q': 'HTMLQuoteElement',
     'script': 'HTMLScriptElement',
     'select': 'HTMLSelectElement',
+    'shadow': 'HTMLShadowElement',
     'source': 'HTMLSourceElement',
     'span': 'HTMLSpanElement',
     'style': 'HTMLStyleElement',
-    'time': 'HTMLTimeElement',
-    'caption': 'HTMLTableCaptionElement',
+    'table': 'HTMLTableElement',
+    'tbody': 'HTMLTableSectionElement',
     // WebKit and Moz are wrong:
     // https://bugs.webkit.org/show_bug.cgi?id=111469
     // https://bugzilla.mozilla.org/show_bug.cgi?id=848096
     // 'td': 'HTMLTableCellElement',
-    'col': 'HTMLTableColElement',
-    'table': 'HTMLTableElement',
-    'tr': 'HTMLTableRowElement',
-    'thead': 'HTMLTableSectionElement',
-    'tbody': 'HTMLTableSectionElement',
+    'template': 'HTMLTemplateElement',
     'textarea': 'HTMLTextAreaElement',
-    'track': 'HTMLTrackElement',
+    'thead': 'HTMLTableSectionElement',
+    'time': 'HTMLTimeElement',
     'title': 'HTMLTitleElement',
+    'tr': 'HTMLTableRowElement',
+    'track': 'HTMLTrackElement',
     'ul': 'HTMLUListElement',
     'video': 'HTMLVideoElement',
   };
@@ -6856,9 +6909,6 @@ window.ShadowDOMPolyfill = {};
   Object.getOwnPropertyNames(scope.wrappers).forEach(function(name) {
     window[name] = scope.wrappers[name]
   });
-
-  // Export for testing.
-  scope.knownElements = elements;
 
 })(window.ShadowDOMPolyfill);
 
@@ -7033,50 +7083,67 @@ var ShadowCSS = {
   // 3. shim polyfill directives /* @polyfill */ and /* @polyfill-rule */
   // 4. shim :host and scoping
   shimStyling: function(root, name, extendsName) {
+    var scopeStyles = this.prepareRoot(root, name, extendsName);
     var typeExtension = this.isTypeExtension(extendsName);
+    var scopeSelector = this.makeScopeSelector(name, typeExtension);
     // use caching to make working with styles nodes easier and to facilitate
     // lookup of extendee
-    var def = this.registerDefinition(root, name, extendsName);
-    // find styles and apply shimming...
+    var cssText = stylesToCssText(scopeStyles, true);
+    cssText = this.scopeCssText(cssText, scopeSelector);
+    // cache shimmed css on root for user extensibility
+    if (root) {
+      root.shimmedStyle = cssText;
+    }
+    // add style to document
+    this.addCssToDocument(cssText, name);
+  },
+  /*
+  * Shim a style element with the given selector. Returns cssText that can
+  * be included in the document via Platform.ShadowCSS.addCssToDocument(css).
+  */
+  shimStyle: function(style, selector) {
+    return this.shimCssText(style.textContent, selector);
+  },
+  /*
+  * Shim some cssText with the given selector. Returns cssText that can
+  * be included in the document via Platform.ShadowCSS.addCssToDocument(css).
+  */
+  shimCssText: function(cssText, selector) {
+    cssText = this.insertDirectives(cssText);
+    return this.scopeCssText(cssText, selector);
+  },
+  makeScopeSelector: function(name, typeExtension) {
+    if (name) {
+      return typeExtension ? '[is=' + name + ']' : name;
+    }
+    return '';
+  },
+  isTypeExtension: function(extendsName) {
+    return extendsName && extendsName.indexOf('-') < 0;
+  },
+  prepareRoot: function(root, name, extendsName) {
+    var def = this.registerRoot(root, name, extendsName);
+    this.replaceTextInStyles(def.rootStyles, this.insertDirectives);
+    // remove existing style elements
+    this.removeStyles(root, def.rootStyles);
+    // apply strict attr
     if (this.strictStyling) {
       this.applyScopeToContent(root, name);
     }
-    var cssText = this.stylesToShimmedCssText(def.rootStyles, def.scopeStyles,
-        name, typeExtension);
-    // provide shimmedStyle for user extensibility
-    def.shimmedStyle = cssTextToStyle(cssText);
-    if (root) {
-      root.shimmedStyle = def.shimmedStyle;
-    }
-    // remove existing style elements
-    for (var i=0, l=def.rootStyles.length, s; (i<l) && (s=def.rootStyles[i]); 
-        i++) {
+    return def.scopeStyles;
+  },
+  removeStyles: function(root, styles) {
+    for (var i=0, l=styles.length, s; (i<l) && (s=styles[i]); i++) {
       s.parentNode.removeChild(s);
     }
-    // add style to document
-    addCssToDocument(cssText);
   },
-  // apply @polyfill rules + :host and scope shimming
-  stylesToShimmedCssText: function(rootStyles, scopeStyles, name,
-      typeExtension) {
-    name = name || '';
-    // insert @polyfill and @polyfill-rule rules into style elements
-    // scoping process takes care of shimming these
-    this.insertPolyfillDirectives(rootStyles);
-    this.insertPolyfillRules(rootStyles);
-    var cssText = this.shimScoping(scopeStyles, name, typeExtension);
-    // note: we only need to do rootStyles since these are unscoped.
-    cssText += this.extractPolyfillUnscopedRules(rootStyles);
-    return cssText.trim();
-  },
-  registerDefinition: function(root, name, extendsName) {
+  registerRoot: function(root, name, extendsName) {
     var def = this.registry[name] = {
       root: root,
       name: name,
       extendsName: extendsName
     }
-    var styles = root ? root.querySelectorAll('style') : [];
-    styles = styles ? Array.prototype.slice.call(styles, 0) : [];
+    var styles = this.findStyles(root);
     def.rootStyles = styles;
     def.scopeStyles = def.rootStyles;
     var extendee = this.registry[def.extendsName];
@@ -7085,8 +7152,14 @@ var ShadowCSS = {
     }
     return def;
   },
-  isTypeExtension: function(extendsName) {
-    return extendsName && extendsName.indexOf('-') < 0;
+  findStyles: function(root) {
+    if (!root) {
+      return [];
+    }
+    var styles = root.querySelectorAll('style');
+    return Array.prototype.filter.call(styles, function(s) {
+      return !s.hasAttribute(NO_SHIM_ATTRIBUTE);
+    });
   },
   applyScopeToContent: function(root, name) {
     if (root) {
@@ -7103,31 +7176,32 @@ var ShadowCSS = {
           this);
     }
   },
+  insertDirectives: function(cssText) {
+    cssText = this.insertPolyfillDirectivesInCssText(cssText);
+    return this.insertPolyfillRulesInCssText(cssText);
+  },
   /*
    * Process styles to convert native ShadowDOM rules that will trip
-   * up the css parser; we rely on decorating the stylesheet with comments.
+   * up the css parser; we rely on decorating the stylesheet with inert rules.
    * 
    * For example, we convert this rule:
    * 
-   * (comment start) @polyfill :host menu-item (comment end)
-   * shadow::-webkit-distributed(menu-item) {
+   * polyfill-next-selector { content: ':host menu-item'; }
+   * ::content menu-item {
    * 
    * to this:
    * 
    * scopeName menu-item {
    *
   **/
-  insertPolyfillDirectives: function(styles) {
-    if (styles) {
-      Array.prototype.forEach.call(styles, function(s) {
-        s.textContent = this.insertPolyfillDirectivesInCssText(s.textContent);
-      }, this);
-    }
-  },
   insertPolyfillDirectivesInCssText: function(cssText) {
-    return cssText.replace(cssPolyfillCommentRe, function(match, p1) {
+    // TODO(sorvell): remove either content or comment
+    cssText = cssText.replace(cssCommentNextSelectorRe, function(match, p1) {
       // remove end comment delimiter and add block start
       return p1.slice(0, -2) + '{';
+    });
+    return cssText.replace(cssContentNextSelectorRe, function(match, p1) {
+      return p1 + ' {';
     });
   },
   /*
@@ -7135,26 +7209,50 @@ var ShadowCSS = {
    * 
    * For example, we convert this rule:
    * 
-   * (comment start) @polyfill-rule :host menu-item { 
-   * ... } (comment end)
+   * polyfill-rule {
+   *   content: ':host menu-item';
+   * ...
+   * }
    * 
    * to this:
    * 
    * scopeName menu-item {...}
    *
   **/
-  insertPolyfillRules: function(styles) {
-    if (styles) {
-      Array.prototype.forEach.call(styles, function(s) {
-        s.textContent = this.insertPolyfillRulesInCssText(s.textContent);
-      }, this);
-    }
-  },
   insertPolyfillRulesInCssText: function(cssText) {
-    return cssText.replace(cssPolyfillRuleCommentRe, function(match, p1) {
+    // TODO(sorvell): remove either content or comment
+    cssText = cssText.replace(cssCommentRuleRe, function(match, p1) {
       // remove end comment delimiter
       return p1.slice(0, -1);
     });
+    return cssText.replace(cssContentRuleRe, function(match, p1, p2, p3) {
+      var rule = match.replace(p1, '').replace(p2, '');
+      return p3 + rule;
+    });
+  },
+  /* Ensure styles are scoped. Pseudo-scoping takes a rule like:
+   * 
+   *  .foo {... } 
+   *  
+   *  and converts this to
+   *  
+   *  scopeName .foo { ... }
+  */
+  scopeCssText: function(cssText, scopeSelector) {
+    var unscoped = this.extractUnscopedRulesFromCssText(cssText);
+    cssText = this.insertPolyfillHostInCssText(cssText);
+    cssText = this.convertColonHost(cssText);
+    cssText = this.convertColonAncestor(cssText);
+    cssText = this.convertCombinators(cssText);
+    if (scopeSelector) {
+      var self = this, cssText;
+      withCssRules(cssText, function(rules) {
+        cssText = self.scopeRules(rules, scopeSelector);
+      });
+
+    }
+    cssText = cssText + '\n' + unscoped;
+    return cssText.trim();
   },
   /*
    * Process styles to add rules which will only apply under the polyfill
@@ -7170,47 +7268,16 @@ var ShadowCSS = {
    * menu-item {...}
    *
   **/
-  extractPolyfillUnscopedRules: function(styles) {
-    var cssText = '';
-    if (styles) {
-      Array.prototype.forEach.call(styles, function(s) {
-        cssText += this.extractPolyfillUnscopedRulesFromCssText(
-            s.textContent) + '\n\n';
-      }, this);
+  extractUnscopedRulesFromCssText: function(cssText) {
+    // TODO(sorvell): remove either content or comment
+    var r = '', m;
+    while (m = cssCommentUnscopedRuleRe.exec(cssText)) {
+      r += m[1].slice(0, -1) + '\n\n';
     }
-    return cssText;
-  },
-  extractPolyfillUnscopedRulesFromCssText: function(cssText) {
-    var r = '', matches;
-    while (matches = cssPolyfillUnscopedRuleCommentRe.exec(cssText)) {
-      r += matches[1].slice(0, -1) + '\n\n';
+    while (m = cssContentUnscopedRuleRe.exec(cssText)) {
+      r += m[0].replace(m[2], '').replace(m[1], m[3]) + '\n\n';
     }
     return r;
-  },
-  /* Ensure styles are scoped. Pseudo-scoping takes a rule like:
-   * 
-   *  .foo {... } 
-   *  
-   *  and converts this to
-   *  
-   *  scopeName .foo { ... }
-  */
-  shimScoping: function(styles, name, typeExtension) {
-    if (styles) {
-      return this.convertScopedStyles(styles, name, typeExtension);
-    }
-  },
-  convertScopedStyles: function(styles, name, typeExtension) {
-    var cssText = stylesToCssText(styles);
-    cssText = this.insertPolyfillHostInCssText(cssText);
-    cssText = this.convertColonHost(cssText);
-    cssText = this.convertColonAncestor(cssText);
-    cssText = this.convertCombinators(cssText);
-    if (name) {
-      var rules = cssToRules(cssText);
-      cssText = this.scopeRules(rules, name, typeExtension);
-    }
-    return cssText;
   },
   /*
    * convert a rule like :host(.foo) > .bar { }
@@ -7272,63 +7339,68 @@ var ShadowCSS = {
    * Convert ^ and ^^ combinators by replacing with space.
   */
   convertCombinators: function(cssText) {
-    return cssText.replace(/\^\^/g, ' ').replace(/\^/g, ' ');
-  },
-  // change a selector like 'div' to 'name div'
-  scopeRules: function(cssRules, name, typeExtension) {
-    var cssText = '';
-    Array.prototype.forEach.call(cssRules, function(rule) {
-      if (rule.selectorText && (rule.style && rule.style.cssText)) {
-        cssText += this.scopeSelector(rule.selectorText, name, typeExtension, 
-          this.strictStyling) + ' {\n\t';
-        cssText += this.propertiesFromRule(rule) + '\n}\n\n';
-      } else if (rule.media) {
-        cssText += '@media ' + rule.media.mediaText + ' {\n';
-        cssText += this.scopeRules(rule.cssRules, name, typeExtension);
-        cssText += '\n}\n\n';
-      } else if (rule.cssText) {
-        cssText += rule.cssText + '\n\n';
-      }
-    }, this);
+    for (var i=0; i < combinatorsRe.length; i++) {
+      cssText = cssText.replace(combinatorsRe[i], ' ');
+    }
     return cssText;
   },
-  scopeSelector: function(selector, name, typeExtension, strict) {
+  // change a selector like 'div' to 'name div'
+  scopeRules: function(cssRules, scopeSelector) {
+    var cssText = '';
+    if (cssRules) {
+      Array.prototype.forEach.call(cssRules, function(rule) {
+        if (rule.selectorText && (rule.style && rule.style.cssText)) {
+          cssText += this.scopeSelector(rule.selectorText, scopeSelector, 
+            this.strictStyling) + ' {\n\t';
+          cssText += this.propertiesFromRule(rule) + '\n}\n\n';
+        } else if (rule.type === CSSRule.MEDIA_RULE) {
+          cssText += '@media ' + rule.media.mediaText + ' {\n';
+          cssText += this.scopeRules(rule.cssRules, scopeSelector);
+          cssText += '\n}\n\n';
+        } else if (rule.cssText) {
+          cssText += rule.cssText + '\n\n';
+        }
+      }, this);
+    }
+    return cssText;
+  },
+  scopeSelector: function(selector, scopeSelector, strict) {
     var r = [], parts = selector.split(',');
     parts.forEach(function(p) {
       p = p.trim();
-      if (this.selectorNeedsScoping(p, name, typeExtension)) {
+      if (this.selectorNeedsScoping(p, scopeSelector)) {
         p = (strict && !p.match(polyfillHostNoCombinator)) ? 
-            this.applyStrictSelectorScope(p, name) :
-            this.applySimpleSelectorScope(p, name, typeExtension);
+            this.applyStrictSelectorScope(p, scopeSelector) :
+            this.applySimpleSelectorScope(p, scopeSelector);
       }
       r.push(p);
     }, this);
     return r.join(', ');
   },
-  selectorNeedsScoping: function(selector, name, typeExtension) {
-    var re = this.makeScopeMatcher(name, typeExtension);
+  selectorNeedsScoping: function(selector, scopeSelector) {
+    var re = this.makeScopeMatcher(scopeSelector);
     return !selector.match(re);
   },
-  makeScopeMatcher: function(name, typeExtension) {
-    var matchScope = typeExtension ? '\\[is=[\'"]?' + name + '[\'"]?\\]' : name;
-    return new RegExp('^(' + matchScope + ')' + selectorReSuffix, 'm');
+  makeScopeMatcher: function(scopeSelector) {
+    scopeSelector = scopeSelector.replace(/\[/g, '\\[').replace(/\[/g, '\\]');
+    return new RegExp('^(' + scopeSelector + ')' + selectorReSuffix, 'm');
   },
   // scope via name and [is=name]
-  applySimpleSelectorScope: function(selector, name, typeExtension) {
-    var scoper = typeExtension ? '[is=' + name + ']' : name;
+  applySimpleSelectorScope: function(selector, scopeSelector) {
     if (selector.match(polyfillHostRe)) {
-      selector = selector.replace(polyfillHostNoCombinator, scoper);
-      return selector.replace(polyfillHostRe, scoper + ' ');
+      selector = selector.replace(polyfillHostNoCombinator, scopeSelector);
+      return selector.replace(polyfillHostRe, scopeSelector + ' ');
     } else {
-      return scoper + ' ' + selector;
+      return scopeSelector + ' ' + selector;
     }
   },
   // return a selector with [name] suffix on each simple selector
   // e.g. .foo.bar > .zot becomes .foo[name].bar[name] > .zot[name]
-  applyStrictSelectorScope: function(selector, name) {
+  applyStrictSelectorScope: function(selector, scopeSelector) {
+    scopeSelector = scopeSelector.replace(/\[is=([^\]]*)\]/g, '$1');
     var splits = [' ', '>', '+', '~'],
       scoped = selector,
-      attrName = '[' + name + ']';
+      attrName = '[' + scopeSelector + ']';
     splits.forEach(function(sep) {
       var parts = scoped.split(sep);
       scoped = parts.map(function(p) {
@@ -7354,14 +7426,37 @@ var ShadowCSS = {
           rule.style.content + '\';');
     }
     return rule.style.cssText;
+  },
+  replaceTextInStyles: function(styles, action) {
+    if (styles && action) {
+      if (!(styles instanceof Array)) {
+        styles = [styles];
+      }
+      Array.prototype.forEach.call(styles, function(s) {
+        s.textContent = action.call(this, s.textContent);
+      }, this);
+    }
+  },
+  addCssToDocument: function(cssText, name) {
+    if (cssText.match('@import')) {
+      addOwnSheet(cssText, name);
+    } else {
+      addCssToDocument(cssText);
+    }
   }
 };
 
 var selectorRe = /([^{]*)({[\s\S]*?})/gim,
     cssCommentRe = /\/\*[^*]*\*+([^/*][^*]*\*+)*\//gim,
-    cssPolyfillCommentRe = /\/\*\s*@polyfill ([^*]*\*+([^/*][^*]*\*+)*\/)([^{]*?){/gim,
-    cssPolyfillRuleCommentRe = /\/\*\s@polyfill-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
-    cssPolyfillUnscopedRuleCommentRe = /\/\*\s@polyfill-unscoped-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
+    // TODO(sorvell): remove either content or comment
+    cssCommentNextSelectorRe = /\/\*\s*@polyfill ([^*]*\*+([^/*][^*]*\*+)*\/)([^{]*?){/gim,
+    cssContentNextSelectorRe = /polyfill-next-selector[^}]*content\:[\s]*'([^']*)'[^}]*}([^{]*?){/gim,
+    // TODO(sorvell): remove either content or comment
+    cssCommentRuleRe = /\/\*\s@polyfill-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
+    cssContentRuleRe = /(polyfill-rule)[^}]*(content\:[\s]*'([^']*)'[^;]*;)[^}]*}/gim,
+    // TODO(sorvell): remove either content or comment
+    cssCommentUnscopedRuleRe = /\/\*\s@polyfill-unscoped-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
+    cssContentUnscopedRuleRe = /(polyfill-unscoped-rule)[^}]*(content\:[\s]*'([^']*)'[^;]*;)[^}]*}/gim,
     cssPseudoRe = /::(x-[^\s{,(]*)/gim,
     cssPartRe = /::part\(([^)]*)\)/gim,
     // note: :host pre-processed to -shadowcsshost.
@@ -7379,8 +7474,14 @@ var selectorRe = /([^{]*)({[\s\S]*?})/gim,
     colonAncestorRe = /\:ancestor/gim,
     /* host name without combinator */
     polyfillHostNoCombinator = polyfillHost + '-no-combinator',
-    polyfillHostRe = new RegExp(polyfillHost, 'gim');
-    polyfillAncestorRe = new RegExp(polyfillAncestor, 'gim');
+    polyfillHostRe = new RegExp(polyfillHost, 'gim'),
+    polyfillAncestorRe = new RegExp(polyfillAncestor, 'gim'),
+    combinatorsRe = [
+      /\^\^/g,
+      /\^/g,
+      /\/shadow\//g,
+      /\/shadow-deep\//g
+    ];
 
 function stylesToCssText(styles, preserveComments) {
   var cssText = '';
@@ -7403,9 +7504,63 @@ function cssTextToStyle(cssText) {
 function cssToRules(cssText) {
   var style = cssTextToStyle(cssText);
   document.head.appendChild(style);
-  var rules = style.sheet.cssRules;
+  var rules = [];
+  if (style.sheet) {
+    // TODO(sorvell): Firefox throws when accessing the rules of a stylesheet
+    // with an @import
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=625013
+    try {
+      rules = style.sheet.cssRules;
+    } catch(e) {
+      //
+    }
+  } else {
+    console.warn('sheet not found', style);
+  }
   style.parentNode.removeChild(style);
   return rules;
+}
+
+var frame = document.createElement('iframe');
+frame.style.display = 'none';
+
+function initFrame() {
+  frame.initialized = true;
+  document.body.appendChild(frame);
+  var doc = frame.contentDocument;
+  var base = doc.createElement('base');
+  base.href = document.baseURI;
+  doc.head.appendChild(base);
+}
+
+function inFrame(fn) {
+  if (!frame.initialized) {
+    initFrame();
+  }
+  document.body.appendChild(frame);
+  fn(frame.contentDocument);
+  document.body.removeChild(frame);
+}
+
+// TODO(sorvell): use an iframe if the cssText contains an @import to workaround
+// https://code.google.com/p/chromium/issues/detail?id=345114
+var isChrome = navigator.userAgent.match('Chrome');
+function withCssRules(cssText, callback) {
+  if (!callback) {
+    return;
+  }
+  var rules;
+  if (cssText.match('@import') && isChrome) {
+    var style = cssTextToStyle(cssText);
+    inFrame(function(doc) {
+      doc.head.appendChild(style.impl);
+      rules = style.sheet.cssRules;
+      callback(rules);
+    });
+  } else {
+    rules = cssToRules(cssText);
+    callback(rules);
+  }
 }
 
 function rulesToCss(cssRules) {
@@ -7421,8 +7576,16 @@ function addCssToDocument(cssText) {
   }
 }
 
+function addOwnSheet(cssText, name) {
+  var style = cssTextToStyle(cssText);
+  style.setAttribute(name, '');
+  style.setAttribute(SHIMMED_ATTRIBUTE, '');
+  document.head.appendChild(style);
+}
+
 var SHIM_ATTRIBUTE = 'shim-shadowdom';
 var SHIMMED_ATTRIBUTE = 'shim-shadowdom-css';
+var NO_SHIM_ATTRIBUTE = 'no-shim';
 
 var sheet;
 function getSheet() {
@@ -7477,8 +7640,7 @@ if (window.ShadowDOMPolyfill) {
         } else {
           urlResolver.resolveStyle(style);  
         }
-        var styles = [style];
-        style.textContent = ShadowCSS.stylesToShimmedCssText(styles, styles);
+        style.textContent = ShadowCSS.shimStyle(style);
         style.removeAttribute(SHIM_ATTRIBUTE, '');
         style.setAttribute(SHIMMED_ATTRIBUTE, '');
         style[SHIMMED_ATTRIBUTE] = true;
@@ -8294,17 +8456,6 @@ scope.mixin = mixin;
     })();
   }
 
-  // TODO(sorvell): workaround for bug:
-  // https://code.google.com/p/chromium/issues/detail?id=229142
-  // remove when this bug is addressed
-  // give main document templates a base that allows them to fetch eagerly
-  // resolved paths relative to the main document
-  var template = document.createElement('template');
-  var base = document.createElement('base');
-  base.href = document.baseURI;
-  template.content.ownerDocument.appendChild(base);
-  
-
   // utility
 
   function createDOM(inTagOrNode, inHTML, inAttrs) {
@@ -8333,7 +8484,9 @@ scope.mixin = mixin;
 
   // deliver queued delcarations
   scope.deliverDeclarations = function() {
-    scope.deliverDeclarations = null;
+    scope.deliverDeclarations = function() {
+     throw 'Possible attempt to load Polymer twice';
+    };
     return elementDeclarations;
   }
 
@@ -8686,6 +8839,9 @@ var urlResolver = {
         }
       }
     }
+  },
+  resolveTemplate: function(template) {
+    this.resolveDom(template.content, template.ownerDocument.baseURI);
   },
   resolveStyles: function(root, url) {
     var styles = root.querySelectorAll('style');
@@ -9602,9 +9758,12 @@ var importParser = {
     document.head.appendChild(elt);
   },
   // tracks when a loadable element has loaded
-  trackElement: function(elt) {
+  trackElement: function(elt, callback) {
     var self = this;
-    var done = function() {
+    var done = function(e) {
+      if (callback) {
+        callback(e);
+      }
       self.markParsingComplete(elt);
     };
     elt.addEventListener('load', done);
@@ -9636,31 +9795,23 @@ var importParser = {
       }
     }
   },
+  // NOTE: execute scripts by injecting them and watching for the load/error
+  // event. Inline scripts are handled via dataURL's because browsers tend to
+  // provide correct parsing errors in this case. If this has any compatibility
+  // issues, we can switch to injecting the inline script with textContent.
+  // Scripts with dataURL's do not appear to generate load events and therefore
+  // we assume they execute synchronously.
   parseScript: function(scriptElt) {
-    // acquire code to execute
-    var code = (scriptElt.__resource || scriptElt.textContent).trim();
-    if (code) {
-      // calculate source map hint
-      var moniker = scriptElt.__nodeUrl;
-      if (!moniker) {
-        moniker = scriptElt.ownerDocument.baseURI;
-        // there could be more than one script this url
-        var tag = '[' + Math.floor((Math.random()+1)*1000) + ']';
-        // TODO(sjmiles): Polymer hack, should be pluggable if we need to allow 
-        // this sort of thing
-        var matches = code.match(/Polymer\(['"]([^'"]*)/);
-        tag = matches && matches[1] || tag;
-        // tag the moniker
-        moniker += '/' + tag + '.js';
-      }
-      // source map hint
-      code += "\n//# sourceURL=" + moniker + "\n";
-      // evaluate the code
-      scope.currentScript = scriptElt;
-      eval.call(window, code);
-      scope.currentScript = null;
-    }
-    this.markParsingComplete(scriptElt);
+    var script = document.createElement('script');
+    script.__importElement = scriptElt;
+    script.src = scriptElt.src ? scriptElt.src : 
+        generateScriptDataUrl(scriptElt);
+    scope.currentScript = scriptElt;
+    this.trackElement(script, function(e) {
+      script.parentNode.removeChild(script);
+      scope.currentScript = null;  
+    });
+    document.head.appendChild(script);
   },
   // determine the next element in the tree which should be parsed
   nextToParse: function() {
@@ -9692,15 +9843,38 @@ var importParser = {
     if (nodeIsImport(node) && !node.import) {
       return false;
     }
-    if (node.localName === 'script' && node.src && !node.__resource) {
-      return false;
-    }
     return true;
   }
 };
 
 function nodeIsImport(elt) {
   return (elt.localName === 'link') && (elt.rel === IMPORT_LINK_TYPE);
+}
+
+function generateScriptDataUrl(script) {
+  var scriptContent = generateScriptContent(script);
+  return 'data:text/javascript;base64,' + btoa(scriptContent);
+}
+
+function generateScriptContent(script) {
+  return script.textContent + generateSourceMapHint(script);
+}
+
+// calculate source map hint
+function generateSourceMapHint(script) {
+  var moniker = script.__nodeUrl;
+  if (!moniker) {
+    moniker = script.ownerDocument.baseURI;
+    // there could be more than one script this url
+    var tag = '[' + Math.floor((Math.random()+1)*1000) + ']';
+    // TODO(sjmiles): Polymer hack, should be pluggable if we need to allow 
+    // this sort of thing
+    var matches = script.textContent.match(/Polymer\(['"]([^'"]*)/);
+    tag = matches && matches[1] || tag;
+    // tag the moniker
+    moniker += '/' + tag + '.js';
+  }
+  return '\n//# sourceURL=' + moniker + '\n';
 }
 
 // style/stylesheet handling
@@ -9777,8 +9951,6 @@ if (!useNative) {
 
   // for any document, importer:
   // - loads any linked import documents (with deduping)
-  // for any import document, importer also:
-  // - loads text of external script tags
 
   var importer = {
     documents: {},
@@ -9786,9 +9958,7 @@ if (!useNative) {
     documentPreloadSelectors: 'link[rel=' + IMPORT_LINK_TYPE + ']',
     // nodes to load in imports
     importsPreloadSelectors: [
-        'link[rel=' + IMPORT_LINK_TYPE + ']',
-        'script[src]:not([type])',
-        'script[src][type="text/javascript"]'
+      'link[rel=' + IMPORT_LINK_TYPE + ']'
     ].join(','),
     loadNode: function(node) {
       importLoader.addNode(node);
@@ -9875,6 +10045,11 @@ if (!useNative) {
     if (!doc.baseURI) {
       doc.baseURI = url;
     }
+    // ensure UTF-8 charset
+    var meta = doc.createElement('meta');
+    meta.setAttribute('charset', 'utf-8');
+
+    doc.head.appendChild(meta);
     doc.head.appendChild(base);
     // install HTML last as it may trigger CustomElement upgrades
     // TODO(sjmiles): problem wrt to template boostrapping below,
@@ -10445,7 +10620,6 @@ function upgradeDocument(doc) {
 
 function upgradeDocumentTree(doc) {
   doc = wrapIfNeeded(doc);
-  upgradeDocument(doc);
   //console.log('upgradeDocumentTree: ', (doc.baseURI).split('/').pop());
   // upgrade contained imported documents
   var imports = doc.querySelectorAll('link[rel=' + IMPORT_LINK_TYPE + ']');
@@ -10454,6 +10628,7 @@ function upgradeDocumentTree(doc) {
       upgradeDocumentTree(n.import);
     }
   }
+  upgradeDocument(doc);
 }
 
 // exports
@@ -10727,11 +10902,9 @@ if (useNative) {
     var used = {};
     // start with inSrc
     var p = inSrc;
-    // sometimes the default is HTMLUnknownElement.prototype instead of
-    // HTMLElement.prototype, so we add a test
-    // the idea is to avoid mixing in native prototypes, so adding
-    // the second test is WLOG
-    while (p !== inNative && p !== HTMLUnknownElement.prototype) {
+    // The default is HTMLElement.prototype, so we add a test to avoid mixing in
+    // native prototypes
+    while (p !== inNative && p !== HTMLElement.prototype) {
       var keys = Object.getOwnPropertyNames(p);
       for (var i=0, k; k=keys[i]; i++) {
         if (!used[k]) {
@@ -10803,6 +10976,17 @@ if (useNative) {
     };
   }
 
+  var HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+  function createElementNS(namespace, tag, typeExtension) {
+    // NOTE: we do not support non-HTML elements,
+    // just call createElementNS for non HTML Elements
+    if (namespace === HTML_NAMESPACE) {
+      return createElement(tag, typeExtension);
+    } else {
+      return domCreateElementNS(namespace, tag);
+    }
+  }
+
   function createElement(tag, typeExtension) {
     // TODO(sjmiles): ignore 'tag' when using 'typeExtension', we could
     // error check it, or perhaps there should only ever be one argument
@@ -10855,6 +11039,7 @@ if (useNative) {
   // capture native createElement before we override it
 
   var domCreateElement = document.createElement.bind(document);
+  var domCreateElementNS = document.createElementNS.bind(document);
 
   // capture native cloneNode before we override it
 
@@ -10864,6 +11049,7 @@ if (useNative) {
 
   document.registerElement = register;
   document.createElement = createElement; // override
+  document.createElementNS = createElementNS; // override
   Node.prototype.cloneNode = cloneNode; // override
 
   scope.registry = registry;
@@ -10881,6 +11067,32 @@ if (useNative) {
    */
   scope.upgrade = upgradeElement;
 }
+
+// Create a custom 'instanceof'. This is necessary when CustomElements
+// are implemented via a mixin strategy, as for example on IE10.
+var isInstance;
+if (!Object.__proto__ && !useNative) {
+  isInstance = function(obj, ctor) {
+    var p = obj;
+    while (p) {
+      // NOTE: this is not technically correct since we're not checking if
+      // an object is an instance of a constructor; however, this should
+      // be good enough for the mixin strategy.
+      if (p === ctor.prototype) {
+        return true;
+      }
+      p = p.__proto__;
+    }
+    return false;
+  }
+} else {
+  isInstance = function(obj, base) {
+    return obj instanceof base;
+  }
+}
+
+// exports
+scope.instanceof = isInstance;
 
 // bc
 document.register = document.registerElement;
@@ -11030,12 +11242,6 @@ if (document.readyState === 'complete' || scope.flags.eager) {
  */
 (function() {
 
-// inject style sheet
-var style = document.createElement('style');
-style.textContent = 'element {display: none !important;} /* injected by platform.js */';
-var head = document.querySelector('head');
-head.insertBefore(style, head.firstChild);
-
 if (window.ShadowDOMPolyfill) {
 
   // ensure wrapped inputs for these functions
@@ -11065,87 +11271,158 @@ if (window.ShadowDOMPolyfill) {
  * license that can be found in the LICENSE file.
  */
 (function(scope) {
+  var endOfMicrotask = scope.endOfMicrotask;
 
-var STYLE_SELECTOR = 'style';
+  // Generic url loader
+  function Loader(regex) {
+    this.regex = regex;
+  }
+  Loader.prototype = {
+    // TODO(dfreedm): there may be a better factoring here
+    // extract absolute urls from the text (full of relative urls)
+    extractUrls: function(text, base) {
+      var matches = [];
+      var matched, u;
+      while ((matched = this.regex.exec(text))) {
+        u = new URL(matched[1], base);
+        matches.push({matched: matched[0], url: u.href});
+      }
+      return matches;
+    },
+    // take a text blob, a root url, and a callback and load all the urls found within the text
+    // returns a map of absolute url to text
+    process: function(text, root, callback) {
+      var matches = this.extractUrls(text, root);
+      this.fetch(matches, {}, callback);
+    },
+    // build a mapping of url -> text from matches
+    fetch: function(matches, map, callback) {
+      var inflight = matches.length;
+
+      // return early if there is no fetching to be done
+      if (!inflight) {
+        return callback(map);
+      }
+
+      var done = function() {
+        if (--inflight === 0) {
+          callback(map);
+        }
+      };
+
+      // map url -> responseText
+      var handleXhr = function(err, request) {
+        var match = request.match;
+        var key = match.url;
+        // handle errors with an empty string
+        if (err) {
+          map[key] = '';
+          return done();
+        }
+        var response = request.response || request.responseText;
+        map[key] = response;
+        this.fetch(this.extractUrls(response, key), map, done);
+      };
+
+      var m, req, url;
+      for (var i = 0; i < inflight; i++) {
+        m = matches[i];
+        url = m.url;
+        // if this url has already been requested, skip requesting it again
+        if (map[url]) {
+          // Async call to done to simplify the inflight logic
+          endOfMicrotask(done);
+          continue;
+        }
+        req = this.xhr(url, handleXhr, this);
+        req.match = m;
+        // tag the map with an XHR request to deduplicate at the same level
+        map[url] = req;
+      }
+    },
+    xhr: function(url, callback, scope) {
+      var request = new XMLHttpRequest();
+      request.open('GET', url, true);
+      request.send();
+      request.onload = function() {
+        callback.call(scope, null, request);
+      };
+      request.onerror = function() {
+        callback.call(scope, null, request);
+      };
+      return request;
+    }
+  };
+
+  scope.Loader = Loader;
+})(window.Platform);
+
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+(function(scope) {
 
 var urlResolver = scope.urlResolver;
+var Loader = scope.Loader;
 
-var loader = {
-  cacheStyles: function(styles, callback) {
-    var css = [];
-    for (var i=0, l=styles.length, s; (i<l) && (s=styles[i]); i++) {
-      css.push(s.textContent);
-    }
-    cacheCssText(css.join('\n'), callback);
+function StyleResolver() {
+  this.loader = new Loader(this.regex);
+}
+StyleResolver.prototype = {
+  regex: /@import\s+(?:url)?["'\(]*([^'"\)]*)['"\)]*;/g,
+  // Recursively replace @imports with the text at that url
+  resolve: function(text, url, callback) {
+    var done = function(map) {
+      callback(this.flatten(text, url, map));
+    }.bind(this);
+    this.loader.process(text, url, done);
   },
-  xhrStyles: function(styles, callback) {
+  // resolve the textContent of a style node
+  resolveNode: function(style, callback) {
+    var text = style.textContent;
+    var url = style.ownerDocument.baseURI;
+    var done = function(text) {
+      style.textContent = text;
+      callback(style);
+    };
+    this.resolve(text, url, done);
+  },
+  // flatten all the @imports to text
+  flatten: function(text, base, map) {
+    var matches = this.loader.extractUrls(text, base);
+    var match, url, intermediate;
+    for (var i = 0; i < matches.length; i++) {
+      match = matches[i];
+      url = match.url;
+      // resolve any css text to be relative to the importer
+      intermediate = urlResolver.resolveCssText(map[url], url);
+      // flatten intermediate @imports
+      intermediate = this.flatten(intermediate, url, map);
+      text = text.replace(match.matched, intermediate);
+    }
+    return text;
+  },
+  loadStyles: function(styles, callback) {
     var loaded=0, l = styles.length;
     // called in the context of the style
     function loadedStyle(style) {
-      //console.log(style.textContent);
       loaded++;
       if (loaded === l && callback) {
         callback();
       }
     }
     for (var i=0, s; (i<l) && (s=styles[i]); i++) {
-      xhrLoadStyle(s, loadedStyle);
+      this.resolveNode(s, loadedStyle);
     }
   }
 };
 
-// use the platform to preload styles
-var preloadElement = document.createElement('preloader');
-preloadElement.style.display = 'none';
-var preloadRoot = preloadElement.createShadowRoot();
-document.head.appendChild(preloadElement);
-
-function cacheCssText(cssText, callback) {
-  var style = createStyleElement(cssText);
-  if (callback) {
-    style.addEventListener('load', callback);
-    style.addEventListener('error', callback);
-  }
-  preloadRoot.appendChild(style);
-}
-
-function createStyleElement(cssText, scope) {
-  scope = scope || document;
-  scope = scope.createElement ? scope : scope.ownerDocument;
-  var style = scope.createElement('style');
-  style.textContent = cssText;
-  return style;
-}
-
-// TODO(sorvell): use a common loader shared with HTMLImports polyfill
-// currently, this just loads the first @import per style element 
-// and does not recurse into loaded elements; we'll address this with a 
-// generalized loader that's built out of the one in the HTMLImports polyfill.
-// polyfill the loading of a style element's @import via xhr
-function xhrLoadStyle(style, callback) {
-  HTMLImports.xhr.load(atImportUrlFromStyle(style), function (err, resource,
-      url) {
-    replaceAtImportWithCssText(this, url, resource);
-    this.textContent = urlResolver.resolveCssText(this.textContent, url);
-    callback && callback(this);
-  }, style);
-}
-
-var atImportRe = /@import\s[(]?['"]?([^\s'";)]*)/;
-
-// get the first @import rule from a style
-function atImportUrlFromStyle(style) {
-  var matches = style.textContent.match(atImportRe);
-  return matches && matches[1];
-}
-
-function replaceAtImportWithCssText(style, url, cssText) {
-  var re = new RegExp('@import[^;]*' + url + '[^;]*;', 'i');
-  style.textContent = style.textContent.replace(re, cssText);
-}
+var styleResolver = new StyleResolver();
 
 // exports
-scope.loader = loader;
+scope.styleResolver = styleResolver;
 
 })(window.Platform);
 
@@ -13656,9 +13933,15 @@ PointerGestureEvent.prototype.preventTap = function() {
         }
       }
     },
+    shouldTap: function(e) {
+      if (!e.tapPrevented) {
+        // only allow left click to tap for mouse
+        return e.pointerType === 'mouse' ? e.buttons === 1 : true;
+      }
+    },
     pointerup: function(inEvent) {
       var start = pointermap.get(inEvent.pointerId);
-      if (start && !inEvent.tapPrevented) {
+      if (start && this.shouldTap(inEvent)) {
         var t = scope.findLCA(start.target, inEvent.target);
         if (t) {
           var e = dispatcher.makeEvent('tap', {
@@ -14239,6 +14522,20 @@ PointerGestureEvent.prototype.preventTap = function() {
   };
 
   var hasTemplateElement = typeof HTMLTemplateElement !== 'undefined';
+  if (hasTemplateElement) {
+    // TODO(rafaelw): Remove when fix for
+    // https://codereview.chromium.org/164803002/
+    // makes it to Chrome release.
+    (function() {
+      var t = document.createElement('template');
+      var d = t.content.ownerDocument;
+      var html = d.appendChild(d.createElement('html'));
+      var head = html.appendChild(d.createElement('head'));
+      var base = d.createElement('base');
+      base.href = document.baseURI;
+      head.appendChild(base);
+    })();
+  }
 
   var allTemplatesSelectors = 'template, ' +
       Object.keys(semanticTemplateElements).map(function(tagName) {
@@ -14336,6 +14633,14 @@ PointerGestureEvent.prototype.preventTap = function() {
       var owner = template.ownerDocument;
       if (!owner.stagingDocument_) {
         owner.stagingDocument_ = owner.implementation.createHTMLDocument('');
+
+        // TODO(rafaelw): Remove when fix for
+        // https://codereview.chromium.org/164803002/
+        // makes it to Chrome release.
+        var base = owner.stagingDocument_.createElement('base');
+        base.href = document.baseURI;
+        owner.stagingDocument_.head.appendChild(base);
+
         owner.stagingDocument_.stagingDocument_ = owner.stagingDocument_;
       }
 
