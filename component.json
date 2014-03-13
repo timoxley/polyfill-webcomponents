@@ -1,7 +1,7 @@
 {
   "name": "polyfill-webcomponents",
   "repo": "timoxley/polyfill-webcomponents",
-  "version": "0.20140312.1",
+  "version": "0.20140312.2",
   "description": "Web Component Polyfills courtesy of Polymer",
   "main": "index.js",
   "scripts": [
