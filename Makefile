@@ -26,9 +26,7 @@ build/tools:
 	-cd build/tools && git checkout . && git clean -df
 
 test: build
-	browserify test/index.js > test/build.js
-	open http://localhost:8676/test/index.html &
-	http-server -p 8676
+	cd test && beefy index.js:build.js --open
 
 clean:
 	rm -Rf build

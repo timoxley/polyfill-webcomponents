@@ -15,8 +15,7 @@
   ],
   "license": "BSD-2-Clause",
   "devDependencies": {
-    "http-server": "~0.5.5",
-    "browserify": "~2.35.0"
+    "beefy": "^1.1.0"
   },
   "directories": {
     "test": "test"
