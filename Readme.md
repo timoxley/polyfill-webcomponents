@@ -14,7 +14,7 @@ Polyfills will be regularly updated to latest development versions.
 
 ## Usage
 
-See the [Getting Started](https://github.com/timoxley/polyfill-webcomponents/wiki/Getting-Started) guide for a step-by-step example.
+**See the [Getting Started](https://github.com/timoxley/polyfill-webcomponents/wiki/Getting-Started) guide for a step-by-step example.**
 
 Use in-browser only with [browserify](https://github.com/substack/node-browserify).
 
