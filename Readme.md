@@ -1,8 +1,8 @@
 # polyfill-webcomponents
 
-### Browserify compatible Web Components Polyfills
+### Web Components Polyfills for use with [Browserify](https://github.com/substack/node-browserify).
 
-This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills for next-generation web technology.
+This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify-compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills for next-generation web technology (plus some other stuff).
 
 Polyfills will be regularly updated to latest development versions.
 
