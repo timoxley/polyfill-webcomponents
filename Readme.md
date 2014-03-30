@@ -4,7 +4,7 @@
 
 This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify-compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills for next-generation web technology (plus some other stuff).
 
-Polyfills will be regularly updated to latest development versions.
+Polyfills will be regularly updated to latest development versions. As there is no sensible way to do semver, versions will be tagged by timestamp: `0.YYYYMMDD.patch`. Patch version may be incremented if there's a critical problem with the build.
 
 ## Installation
 
