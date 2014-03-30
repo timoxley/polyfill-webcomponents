@@ -28,6 +28,8 @@ Add this to your `package.json`:
 
 ## Usage
 
+See the [Getting Started](https://github.com/timoxley/polyfill-webcomponents/wiki/Getting-Started) guide for a step-by-step example.
+
 Use in-browser only with [browserify](https://github.com/substack/node-browserify).
 
 ```js
@@ -42,7 +44,7 @@ You can safely require polyfill-webcomponents multiple times, it will only add t
 
 ## Documentation
 
-See the documentation specifically for the **Platform** on the [Polymer website.](http://www.polymer-project.org/)
+See the documentation specifically for the **Platform** on the [Polymer website.](http://www.polymer-project.org/docs/polymer/polymer.html)
 
 ## Features
 
