@@ -12,20 +12,6 @@ Polyfills will be regularly updated to latest development versions.
 > npm install --save polyfill-webcomponents
 ```
 
-### Use as a peer dependency
-
-It is recommended to set `polyfill-webcomponents` as a [Peer Dependency](http://domenic.me/2013/02/08/peer-dependencies/) for anything except your top-level application.
-
-Because `polyfill-webcomponents` necessarily modifies your global state, and will only load once, it doesn't make sense to have multiple copies bundled in your app. Peer dependencies allows a child modules to use the version loaded in the parent module.
-
-Add this to your `package.json`:
-
-```json
-  "peerDependencies": {
-    "polyfill-webcomponents": "*"
-  },
-```
-
 ## Usage
 
 See the [Getting Started](https://github.com/timoxley/polyfill-webcomponents/wiki/Getting-Started) guide for a step-by-step example.
@@ -41,6 +27,20 @@ var Platform = require('polyfill-webcomponents')
 Simply require polyfill-webcomponents anywhere your code needs webcomponent support.
 
 You can safely require polyfill-webcomponents multiple times, it will only add the polyfills once.
+
+### Use as a peer dependency
+
+It is recommended to set `polyfill-webcomponents` as a [Peer Dependency](http://domenic.me/2013/02/08/peer-dependencies/) for anything except your top-level application.
+
+Because `polyfill-webcomponents` necessarily modifies your global state, and will only load once, it doesn't make sense to have multiple copies bundled in your app. Peer dependencies allows a child modules to use the version loaded in the parent module.
+
+Add this to your `package.json`:
+
+```json
+  "peerDependencies": {
+    "polyfill-webcomponents": "*"
+  },
+```
 
 ## Documentation
 
