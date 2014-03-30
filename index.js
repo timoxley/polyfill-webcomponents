@@ -56,12 +56,6 @@ if (typeof WeakMap === 'undefined') {
 (function(global) {
   'use strict';
 
-  var PROP_ADD_TYPE = 'add';
-  var PROP_UPDATE_TYPE = 'update';
-  var PROP_RECONFIGURE_TYPE = 'reconfigure';
-  var PROP_DELETE_TYPE = 'delete';
-  var ARRAY_SPLICE_TYPE = 'splice';
-
   // Detect and do basic sanity checking on Object/Array.observe.
   function detectObjectObserve() {
     if (typeof Object.observe !== 'function' ||
@@ -76,44 +70,29 @@ if (typeof WeakMap === 'undefined') {
     }
 
     var test = {};
+    var arr = [];
     Object.observe(test, callback);
+    Array.observe(arr, callback);
     test.id = 1;
     test.id = 2;
     delete test.id;
+    arr.push(1, 2);
+    arr.length = 0;
+
     Object.deliverChangeRecords(callback);
-    if (records.length !== 3)
+    if (records.length !== 5)
       return false;
 
-    // TODO(rafaelw): Remove this when new change record type names make it to
-    // chrome release.
-    if (records[0].type == 'new' &&
-        records[1].type == 'updated' &&
-        records[2].type == 'deleted') {
-      PROP_ADD_TYPE = 'new';
-      PROP_UPDATE_TYPE = 'updated';
-      PROP_RECONFIGURE_TYPE = 'reconfigured';
-      PROP_DELETE_TYPE = 'deleted';
-    } else if (records[0].type != 'add' ||
-               records[1].type != 'update' ||
-               records[2].type != 'delete') {
-      console.error('Unexpected change record names for Object.observe. ' +
-                    'Using dirty-checking instead');
+    if (records[0].type != 'add' ||
+        records[1].type != 'update' ||
+        records[2].type != 'delete' ||
+        records[3].type != 'splice' ||
+        records[4].type != 'splice') {
       return false;
     }
+
     Object.unobserve(test, callback);
-
-    test = [0];
-    Array.observe(test, callback);
-    test[1] = 1;
-    test.length = 0;
-    Object.deliverChangeRecords(callback);
-    if (records.length != 2)
-      return false;
-    if (records[0].type != ARRAY_SPLICE_TYPE ||
-        records[1].type != ARRAY_SPLICE_TYPE) {
-      return false;
-    }
-    Array.unobserve(test, callback);
+    Array.unobserve(arr, callback);
 
     return true;
   }
@@ -272,7 +251,7 @@ if (typeof WeakMap === 'undefined') {
       for (var i = 0; i < this.length; i++) {
         if (i)
           obj = obj[this[i - 1]];
-        if (!obj)
+        if (!isObject(obj))
           return;
         observe(obj);
       }
@@ -482,7 +461,7 @@ if (typeof WeakMap === 'undefined') {
     var resetScheduled = false;
 
     function observe(obj) {
-      if (!isObject(obj))
+      if (!obj)
         return;
 
       var index = toRemove.indexOf(obj);
@@ -498,10 +477,6 @@ if (typeof WeakMap === 'undefined') {
     }
 
     function reset() {
-      resetScheduled = false;
-      if (!resetNeeded)
-        return;
-
       var objs = toRemove === emptyArray ? [] : toRemove;
       toRemove = objects;
       objects = objs;
@@ -524,16 +499,26 @@ if (typeof WeakMap === 'undefined') {
       toRemove.length = 0;
     }
 
+    function scheduledReset() {
+      resetScheduled = false;
+      if (!resetNeeded)
+        return;
+
+      reset();
+    }
+
     function scheduleReset() {
       if (resetScheduled)
         return;
 
       resetNeeded = true;
       resetScheduled = true;
-      runEOM(reset);
+      runEOM(scheduledReset);
     }
 
     function callback() {
+      reset();
+
       var observer;
 
       for (var id in observers) {
@@ -543,8 +528,6 @@ if (typeof WeakMap === 'undefined') {
 
         observer.check_();
       }
-
-      scheduleReset();
     }
 
     var record = {
@@ -679,7 +662,14 @@ if (typeof WeakMap === 'undefined') {
 
   var runningMicrotaskCheckpoint = false;
 
-  var hasDebugForceFullDelivery = typeof Object.deliverAllChangeRecords == 'function';
+  var hasDebugForceFullDelivery = hasObserve && (function() {
+    try {
+      eval('%RunMicrotasks()');
+      return true;
+    } catch (ex) {
+      return false;
+    }
+  })();
 
   global.Platform = global.Platform || {};
 
@@ -688,7 +678,7 @@ if (typeof WeakMap === 'undefined') {
       return;
 
     if (hasDebugForceFullDelivery) {
-      Object.deliverAllChangeRecords();
+      eval('%RunMicrotasks()');
       return;
     }
 
@@ -1118,10 +1108,11 @@ if (typeof WeakMap === 'undefined') {
     }
   }
 
-  var expectedRecordTypes = {};
-  expectedRecordTypes[PROP_ADD_TYPE] = true;
-  expectedRecordTypes[PROP_UPDATE_TYPE] = true;
-  expectedRecordTypes[PROP_DELETE_TYPE] = true;
+  var expectedRecordTypes = {
+    add: true,
+    update: true,
+    delete: true
+  };
 
   function notifyFunction(object, name) {
     if (typeof Object.observe !== 'function')
@@ -1145,7 +1136,7 @@ if (typeof WeakMap === 'undefined') {
     var value = observable.open(function(newValue, oldValue) {
       value = newValue;
       if (notify)
-        notify(PROP_UPDATE_TYPE, oldValue);
+        notify('update', oldValue);
     });
 
     Object.defineProperty(target, name, {
@@ -1187,10 +1178,10 @@ if (typeof WeakMap === 'undefined') {
       if (!(record.name in oldValues))
         oldValues[record.name] = record.oldValue;
 
-      if (record.type == PROP_UPDATE_TYPE)
+      if (record.type == 'update')
         continue;
 
-      if (record.type == PROP_ADD_TYPE) {
+      if (record.type == 'add') {
         if (record.name in removed)
           delete removed[record.name];
         else
@@ -1587,12 +1578,12 @@ if (typeof WeakMap === 'undefined') {
     for (var i = 0; i < changeRecords.length; i++) {
       var record = changeRecords[i];
       switch(record.type) {
-        case ARRAY_SPLICE_TYPE:
+        case 'splice':
           mergeSplice(splices, record.index, record.removed.slice(), record.addedCount);
           break;
-        case PROP_ADD_TYPE:
-        case PROP_UPDATE_TYPE:
-        case PROP_DELETE_TYPE:
+        case 'add':
+        case 'update':
+        case 'delete':
           if (!isIndex(record.name))
             continue;
           var index = toNumber(record.name);
@@ -1641,16 +1632,6 @@ if (typeof WeakMap === 'undefined') {
   global.CompoundObserver = CompoundObserver;
   global.Path = Path;
   global.ObserverTransform = ObserverTransform;
-
-  // TODO(rafaelw): Only needed for testing until new change record names
-  // make it to release.
-  global.Observer.changeRecordTypes = {
-    add: PROP_ADD_TYPE,
-    update: PROP_UPDATE_TYPE,
-    reconfigure: PROP_RECONFIGURE_TYPE,
-    'delete': PROP_DELETE_TYPE,
-    splice: ARRAY_SPLICE_TYPE
-  };
 })(typeof global !== 'undefined' && global && typeof module !== 'undefined' && module ? global : this || window);
 
 // prepoulate window.Platform.flags for default controls
@@ -1925,6 +1906,8 @@ window.ShadowDOMPolyfill = {};
       enumerable: false,
       writable: true
     });
+    // Set it again. Some VMs optimizes objects that are used as prototypes.
+    wrapperConstructor.prototype = wrapperPrototype;
   }
 
   function isWrapperFor(wrapperConstructor, nativeConstructor) {
@@ -1952,9 +1935,9 @@ window.ShadowDOMPolyfill = {};
     function GeneratedWrapper(node) {
       superWrapperConstructor.call(this, node);
     }
-    GeneratedWrapper.prototype =
-        Object.create(superWrapperConstructor.prototype);
-    GeneratedWrapper.prototype.constructor = GeneratedWrapper;
+    var p = Object.create(superWrapperConstructor.prototype);
+    p.constructor = GeneratedWrapper;
+    GeneratedWrapper.prototype = p;
 
     return GeneratedWrapper;
   }
@@ -2528,6 +2511,73 @@ window.ShadowDOMPolyfill = {};
 
 })(window.ShadowDOMPolyfill);
 
+/**
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  /**
+   * A tree scope represents the root of a tree. All nodes in a tree point to
+   * the same TreeScope object. The tree scope of a node get set the first time
+   * it is accessed or when a node is added or remove to a tree.
+   * @constructor
+   */
+  function TreeScope(root, parent) {
+    this.root = root;
+    this.parent = parent;
+  }
+
+  TreeScope.prototype = {
+    get renderer() {
+      if (this.root instanceof scope.wrappers.ShadowRoot) {
+        return scope.getRendererForHost(this.root.host);
+      }
+      return null;
+    },
+
+    contains: function(treeScope) {
+      for (; treeScope; treeScope = treeScope.parent) {
+        if (treeScope === this)
+          return true;
+      }
+      return false;
+    }
+  };
+
+  function setTreeScope(node, treeScope) {
+    if (node.treeScope_ !== treeScope) {
+      node.treeScope_ = treeScope;
+      for (var sr = node.shadowRoot; sr; sr = sr.olderShadowRoot) {
+        sr.treeScope_.parent = treeScope;
+      }
+      for (var child = node.firstChild; child; child = child.nextSibling) {
+        setTreeScope(child, treeScope);
+      }
+    }
+  }
+
+  function getTreeScope(node) {
+    if (node.treeScope_)
+      return node.treeScope_;
+    var parent = node.parentNode;
+    var treeScope;
+    if (parent)
+      treeScope = getTreeScope(parent);
+    else
+      treeScope = new TreeScope(node, null);
+    return node.treeScope_ = treeScope;
+  }
+
+  scope.TreeScope = TreeScope;
+  scope.getTreeScope = getTreeScope;
+  scope.setTreeScope = setTreeScope;
+
+})(window.ShadowDOMPolyfill);
+
 // Copyright 2013 The Polymer Authors. All rights reserved.
 // Use of this source code is goverened by a BSD-style
 // license that can be found in the LICENSE file.
@@ -2536,6 +2586,7 @@ window.ShadowDOMPolyfill = {};
   'use strict';
 
   var forwardMethodsToWrapper = scope.forwardMethodsToWrapper;
+  var getTreeScope = scope.getTreeScope;
   var mixin = scope.mixin;
   var registerWrapper = scope.registerWrapper;
   var unwrap = scope.unwrap;
@@ -2690,34 +2741,26 @@ window.ShadowDOMPolyfill = {};
     return getInsertionParent(node);
   }
 
-  function rootOfNode(node) {
-    var p;
-    while (p = node.parentNode) {
-      node = p;
-    }
-    return node;
-  }
-
   function inSameTree(a, b) {
-    return rootOfNode(a) === rootOfNode(b);
+    return getTreeScope(a) === getTreeScope(b);
   }
-
-  function enclosedBy(a, b) {
-    if (a === b)
-      return true;
-    if (a instanceof wrappers.ShadowRoot)
-      return enclosedBy(rootOfNode(a.host), b);
-    return false;
-  }
-
 
   function dispatchOriginalEvent(originalEvent) {
     // Make sure this event is only dispatched once.
     if (handledEventsTable.get(originalEvent))
       return;
     handledEventsTable.set(originalEvent, true);
+    dispatchEvent(wrap(originalEvent), wrap(originalEvent.target));
+  }
 
-    return dispatchEvent(wrap(originalEvent), wrap(originalEvent.target));
+  function isLoadLikeEvent(event) {
+    switch (event.type) {
+      case 'beforeunload':
+      case 'load':
+      case 'unload':
+        return true;
+    }
+    return false;
   }
 
   function dispatchEvent(event, originalWrapperTarget) {
@@ -2729,15 +2772,15 @@ window.ShadowDOMPolyfill = {};
     scope.renderAllPending();
     var eventPath = retarget(originalWrapperTarget);
 
-    // For window load events the load event is dispatched at the window but
+    // For window "load" events the "load" event is dispatched at the window but
     // the target is set to the document.
     //
     // http://www.whatwg.org/specs/web-apps/current-work/multipage/the-end.html#the-end
     //
     // TODO(arv): Find a less hacky way to do this.
-    if (event.type === 'load' &&
-        eventPath.length === 2 &&
-        eventPath[0].target instanceof wrappers.Document) {
+    if (eventPath.length === 2 &&
+        eventPath[0].target instanceof wrappers.Document &&
+        isLoadLikeEvent(event)) {
       eventPath.shift();
     }
 
@@ -2807,17 +2850,26 @@ window.ShadowDOMPolyfill = {};
 
     if ('relatedTarget' in event) {
       var originalEvent = unwrap(event);
+      var unwrappedRelatedTarget = originalEvent.relatedTarget;
+
       // X-Tag sets relatedTarget on a CustomEvent. If they do that there is no
       // way to have relatedTarget return the adjusted target but worse is that
       // the originalEvent might not have a relatedTarget so we hit an assert
       // when we try to wrap it.
-      if (originalEvent.relatedTarget) {
-        var relatedTarget = wrap(originalEvent.relatedTarget);
+      if (unwrappedRelatedTarget) {
+        // In IE we can get objects that are not EventTargets at this point.
+        // Safari does not have an EventTarget interface so revert to checking
+        // for addEventListener as an approximation.
+        if (unwrappedRelatedTarget instanceof Object &&
+            unwrappedRelatedTarget.addEventListener) {
+          var relatedTarget = wrap(unwrappedRelatedTarget);
 
-        var adjusted = adjustRelatedTarget(currentTarget, relatedTarget);
-        if (adjusted === target)
-          return true;
-
+          var adjusted = adjustRelatedTarget(currentTarget, relatedTarget);
+          if (adjusted === target)
+            return true;
+        } else {
+          adjusted = null;
+        }
         relatedTargetTable.set(event, adjusted);
       }
     }
@@ -2904,10 +2956,14 @@ window.ShadowDOMPolyfill = {};
    * @constructor
    */
   function Event(type, options) {
-    if (type instanceof OriginalEvent)
-      this.impl = type;
-    else
+    if (type instanceof OriginalEvent) {
+      var impl = type;
+      if (!OriginalBeforeUnloadEvent && impl.type === 'beforeunload')
+        return new BeforeUnloadEvent(impl);
+      this.impl = impl;
+    } else {
       return wrap(constructEvent(OriginalEvent, 'Event', type, options));
+    }
   }
   Event.prototype = {
     get target() {
@@ -2925,12 +2981,12 @@ window.ShadowDOMPolyfill = {};
       if (eventPath) {
         var index = 0;
         var lastIndex = eventPath.length - 1;
-        var baseRoot = rootOfNode(currentTargetTable.get(this));
+        var baseRoot = getTreeScope(currentTargetTable.get(this));
 
         for (var i = 0; i <= lastIndex; i++) {
           var currentTarget = eventPath[i].currentTarget;
-          var currentRoot = rootOfNode(currentTarget);
-          if (enclosedBy(baseRoot, currentRoot) &&
+          var currentRoot = getTreeScope(currentTarget);
+          if (currentRoot.contains(baseRoot) &&
               // Make sure we do not add Window to the path.
               (i !== lastIndex || currentTarget instanceof wrappers.Node)) {
             nodeList[index++] = currentTarget;
@@ -3079,8 +3135,12 @@ window.ShadowDOMPolyfill = {};
     configureEventConstructor('FocusEvent', {relatedTarget: null}, 'UIEvent');
   }
 
+  // Safari 7 does not yet have BeforeUnloadEvent.
+  // https://bugs.webkit.org/show_bug.cgi?id=120849
+  var OriginalBeforeUnloadEvent = window.BeforeUnloadEvent;
+
   function BeforeUnloadEvent(impl) {
-    Event.call(this);
+    Event.call(this, impl);
   }
   BeforeUnloadEvent.prototype = Object.create(Event.prototype);
   mixin(BeforeUnloadEvent.prototype, {
@@ -3091,6 +3151,9 @@ window.ShadowDOMPolyfill = {};
       this.impl.returnValue = v;
     }
   });
+
+  if (OriginalBeforeUnloadEvent)
+    registerWrapper(OriginalBeforeUnloadEvent, BeforeUnloadEvent);
 
   function isValidListener(fun) {
     if (typeof fun === 'function')
@@ -3382,22 +3445,43 @@ window.ShadowDOMPolyfill = {};
 
 })(window.ShadowDOMPolyfill);
 
-// Copyright 2012 The Polymer Authors. All rights reserved.
-// Use of this source code is goverened by a BSD-style
-// license that can be found in the LICENSE file.
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  // TODO(arv): Implement.
+
+  scope.wrapHTMLCollection = scope.wrapNodeList;
+  scope.wrappers.HTMLCollection = scope.wrappers.NodeList;
+
+})(window.ShadowDOMPolyfill);
+
+/**
+ * Copyright 2012 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
 
 (function(scope) {
   'use strict';
 
   var EventTarget = scope.wrappers.EventTarget;
   var NodeList = scope.wrappers.NodeList;
+  var TreeScope = scope.TreeScope;
   var assert = scope.assert;
   var defineWrapGetter = scope.defineWrapGetter;
   var enqueueMutation = scope.enqueueMutation;
+  var getTreeScope = scope.getTreeScope;
   var isWrapper = scope.isWrapper;
   var mixin = scope.mixin;
   var registerTransientObservers = scope.registerTransientObservers;
   var registerWrapper = scope.registerWrapper;
+  var setTreeScope = scope.setTreeScope;
   var unwrap = scope.unwrap;
   var wrap = scope.wrap;
   var wrapIfNeeded = scope.wrapIfNeeded;
@@ -3514,23 +3598,27 @@ window.ShadowDOMPolyfill = {};
   }
 
   // http://dom.spec.whatwg.org/#node-is-inserted
-  function nodeWasAdded(node) {
+  function nodeWasAdded(node, treeScope) {
+    setTreeScope(node, treeScope);
     node.nodeIsInserted_();
   }
 
-  function nodesWereAdded(nodes) {
+  function nodesWereAdded(nodes, parent) {
+    var treeScope = getTreeScope(parent);
     for (var i = 0; i < nodes.length; i++) {
-      nodeWasAdded(nodes[i]);
+      nodeWasAdded(nodes[i], treeScope);
     }
   }
 
   // http://dom.spec.whatwg.org/#node-is-removed
   function nodeWasRemoved(node) {
-    // Nothing at this point in time.
+    setTreeScope(node, new TreeScope(node, null));
   }
 
   function nodesWereRemoved(nodes) {
-    // Nothing at this point in time.
+    for (var i = 0; i < nodes.length; i++) {
+      nodeWasRemoved(nodes[i]);
+    }
   }
 
   function ensureSameOwnerDocument(parent, child) {
@@ -3648,6 +3736,17 @@ window.ShadowDOMPolyfill = {};
     return clone;
   }
 
+  function contains(self, child) {
+    if (!child || getTreeScope(self) !== getTreeScope(child))
+      return false;
+
+    for (var node = child; node; node = node.parentNode) {
+      if (node === self)
+        return true;
+    }
+    return false;
+  }
+
   var OriginalNode = window.Node;
 
   /**
@@ -3694,6 +3793,8 @@ window.ShadowDOMPolyfill = {};
      * @private
      */
     this.previousSibling_ = undefined;
+
+    this.treeScope_ = undefined;
   }
 
   var OriginalDocumentFragment = window.DocumentFragment;
@@ -3782,7 +3883,7 @@ window.ShadowDOMPolyfill = {};
         previousSibling: previousNode
       });
 
-      nodesWereAdded(nodes);
+      nodesWereAdded(nodes, this);
 
       return childWrapper;
     },
@@ -3914,7 +4015,7 @@ window.ShadowDOMPolyfill = {};
       });
 
       nodeWasRemoved(oldChildWrapper);
-      nodesWereAdded(nodes);
+      nodesWereAdded(nodes, this);
 
       return oldChildWrapper;
     },
@@ -4006,7 +4107,7 @@ window.ShadowDOMPolyfill = {};
       });
 
       nodesWereRemoved(removedNodes);
-      nodesWereAdded(addedNodes);
+      nodesWereAdded(addedNodes, this);
     },
 
     get childNodes() {
@@ -4024,18 +4125,7 @@ window.ShadowDOMPolyfill = {};
     },
 
     contains: function(child) {
-      if (!child)
-        return false;
-
-      child = wrapIfNeeded(child);
-
-      // TODO(arv): Optimize using ownerDocument etc.
-      if (child === this)
-        return true;
-      var parentNode = child.parentNode;
-      if (!parentNode)
-        return false;
-      return this.contains(parentNode);
+      return contains(this, wrapIfNeeded(child));
     },
 
     compareDocumentPosition: function(otherNode) {
@@ -4092,13 +4182,13 @@ window.ShadowDOMPolyfill = {};
   delete Node.prototype.querySelectorAll;
   Node.prototype = mixin(Object.create(EventTarget.prototype), Node.prototype);
 
+  scope.cloneNode = cloneNode;
   scope.nodeWasAdded = nodeWasAdded;
   scope.nodeWasRemoved = nodeWasRemoved;
   scope.nodesWereAdded = nodesWereAdded;
   scope.nodesWereRemoved = nodesWereRemoved;
   scope.snapshotNodeList = snapshotNodeList;
   scope.wrappers.Node = Node;
-  scope.cloneNode = cloneNode;
 
 })(window.ShadowDOMPolyfill);
 
@@ -4228,6 +4318,12 @@ window.ShadowDOMPolyfill = {};
       }
       wrapperList.length = i;
       return wrapperList;
+    },
+
+    remove: function() {
+      var p = this.parentNode;
+      if (p)
+        p.removeChild(this);
     }
   };
 
@@ -4670,7 +4766,7 @@ window.ShadowDOMPolyfill = {};
       });
 
       nodesWereRemoved(removedNodes);
-      nodesWereAdded(addedNodes);
+      nodesWereAdded(addedNodes, this);
     },
 
     get outerHTML() {
@@ -5170,8 +5266,14 @@ window.ShadowDOMPolyfill = {};
     remove: function(indexOrNode) {
       // Spec only allows index but implementations allow index or node.
       // remove() is also allowed which is same as remove(undefined)
+      if (indexOrNode === undefined) {
+        HTMLElement.prototype.remove.call(this);
+        return;
+      }
+
       if (typeof indexOrNode === 'object')
         indexOrNode = unwrap(indexOrNode);
+
       unwrap(this).remove(indexOrNode);
     },
 
@@ -5184,6 +5286,146 @@ window.ShadowDOMPolyfill = {};
                   document.createElement('select'));
 
   scope.wrappers.HTMLSelectElement = HTMLSelectElement;
+})(window.ShadowDOMPolyfill);
+
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var HTMLElement = scope.wrappers.HTMLElement;
+  var mixin = scope.mixin;
+  var registerWrapper = scope.registerWrapper;
+  var unwrap = scope.unwrap;
+  var wrap = scope.wrap;
+  var wrapHTMLCollection = scope.wrapHTMLCollection;
+
+  var OriginalHTMLTableElement = window.HTMLTableElement;
+
+  function HTMLTableElement(node) {
+    HTMLElement.call(this, node);
+  }
+  HTMLTableElement.prototype = Object.create(HTMLElement.prototype);
+  mixin(HTMLTableElement.prototype, {
+    get caption() {
+      return wrap(unwrap(this).caption);
+    },
+    createCaption: function() {
+      return wrap(unwrap(this).createCaption());
+    },
+
+    get tHead() {
+      return wrap(unwrap(this).tHead);
+    },
+    createTHead: function() {
+      return wrap(unwrap(this).createTHead());
+    },
+
+    createTFoot: function() {
+      return wrap(unwrap(this).createTFoot());
+    },
+    get tFoot() {
+      return wrap(unwrap(this).tFoot);
+    },
+
+    get tBodies() {
+      return wrapHTMLCollection(unwrap(this).tBodies);
+    },
+    createTBody: function() {
+      return wrap(unwrap(this).createTBody());
+    },
+
+    get rows() {
+      return wrapHTMLCollection(unwrap(this).rows);
+    },
+    insertRow: function(index) {
+      return wrap(unwrap(this).insertRow(index));
+    }
+  });
+
+  registerWrapper(OriginalHTMLTableElement, HTMLTableElement,
+                  document.createElement('table'));
+
+  scope.wrappers.HTMLTableElement = HTMLTableElement;
+})(window.ShadowDOMPolyfill);
+
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var HTMLElement = scope.wrappers.HTMLElement;
+  var mixin = scope.mixin;
+  var registerWrapper = scope.registerWrapper;
+  var wrapHTMLCollection = scope.wrapHTMLCollection;
+  var unwrap = scope.unwrap;
+  var wrap = scope.wrap;
+
+  var OriginalHTMLTableSectionElement = window.HTMLTableSectionElement;
+
+  function HTMLTableSectionElement(node) {
+    HTMLElement.call(this, node);
+  }
+  HTMLTableSectionElement.prototype = Object.create(HTMLElement.prototype);
+  mixin(HTMLTableSectionElement.prototype, {
+    get rows() {
+      return wrapHTMLCollection(unwrap(this).rows);
+    },
+    insertRow: function(index) {
+      return wrap(unwrap(this).insertRow(index));
+    }
+  });
+
+  registerWrapper(OriginalHTMLTableSectionElement, HTMLTableSectionElement,
+                  document.createElement('thead'));
+
+  scope.wrappers.HTMLTableSectionElement = HTMLTableSectionElement;
+})(window.ShadowDOMPolyfill);
+
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var HTMLElement = scope.wrappers.HTMLElement;
+  var mixin = scope.mixin;
+  var registerWrapper = scope.registerWrapper;
+  var wrapHTMLCollection = scope.wrapHTMLCollection;
+  var unwrap = scope.unwrap;
+  var wrap = scope.wrap;
+
+  var OriginalHTMLTableRowElement = window.HTMLTableRowElement;
+
+  function HTMLTableRowElement(node) {
+    HTMLElement.call(this, node);
+  }
+  HTMLTableRowElement.prototype = Object.create(HTMLElement.prototype);
+  mixin(HTMLTableRowElement.prototype, {
+    get cells() {
+      return wrapHTMLCollection(unwrap(this).cells);
+    },
+
+    insertCell: function(index) {
+      return wrap(unwrap(this).insertCell(index));
+    }
+  });
+
+  registerWrapper(OriginalHTMLTableRowElement, HTMLTableRowElement,
+                  document.createElement('tr'));
+
+  scope.wrappers.HTMLTableRowElement = HTMLTableRowElement;
 })(window.ShadowDOMPolyfill);
 
 // Copyright 2013 The Polymer Authors. All rights reserved.
@@ -5571,8 +5813,10 @@ window.ShadowDOMPolyfill = {};
   'use strict';
 
   var DocumentFragment = scope.wrappers.DocumentFragment;
+  var TreeScope = scope.TreeScope;
   var elementFromPoint = scope.elementFromPoint;
   var getInnerHTML = scope.getInnerHTML;
+  var getTreeScope = scope.getTreeScope;
   var mixin = scope.mixin;
   var rewrap = scope.rewrap;
   var setInnerHTML = scope.setInnerHTML;
@@ -5590,6 +5834,8 @@ window.ShadowDOMPolyfill = {};
     // createDocumentFragment associates the node with a wrapper
     // DocumentFragment instance. Override that.
     rewrap(node, this);
+
+    this.treeScope_ = new TreeScope(this, getTreeScope(hostWrapper));
 
     var oldShadowRoot = hostWrapper.shadowRoot;
     nextOlderShadowTreeTable.set(this, oldShadowRoot);
@@ -5646,6 +5892,7 @@ window.ShadowDOMPolyfill = {};
   var Node = scope.wrappers.Node;
   var ShadowRoot = scope.wrappers.ShadowRoot;
   var assert = scope.assert;
+  var getTreeScope = scope.getTreeScope;
   var mixin = scope.mixin;
   var oneOf = scope.oneOf;
   var unwrap = scope.unwrap;
@@ -5862,9 +6109,16 @@ window.ShadowDOMPolyfill = {};
   var renderTimer;
 
   function renderAllPending() {
+    // TODO(arv): Order these in document order. That way we do not have to
+    // render something twice.
     for (var i = 0; i < pendingDirtyRenderers.length; i++) {
-      pendingDirtyRenderers[i].render();
+      var renderer = pendingDirtyRenderers[i];
+      var parentRenderer = renderer.parentRenderer;
+      if (parentRenderer && parentRenderer.dirty)
+        continue;
+      renderer.render();
     }
+
     pendingDirtyRenderers = [];
   }
 
@@ -5888,10 +6142,9 @@ window.ShadowDOMPolyfill = {};
   }
 
   function getShadowRootAncestor(node) {
-    for (; node; node = node.parentNode) {
-      if (node instanceof ShadowRoot)
-        return node;
-    }
+    var root = getTreeScope(node).root;
+    if (root instanceof ShadowRoot)
+      return root;
     return null;
   }
 
@@ -6006,6 +6259,10 @@ window.ShadowDOMPolyfill = {};
         renderNode.sync();
 
       this.dirty = false;
+    },
+
+    get parentRenderer() {
+      return getTreeScope(this.host).renderer;
     },
 
     invalidate: function() {
@@ -6437,6 +6694,7 @@ window.ShadowDOMPolyfill = {};
   var Selection = scope.wrappers.Selection;
   var SelectorsInterface = scope.SelectorsInterface;
   var ShadowRoot = scope.wrappers.ShadowRoot;
+  var TreeScope = scope.TreeScope;
   var cloneNode = scope.cloneNode;
   var defineWrapGetter = scope.defineWrapGetter;
   var elementFromPoint = scope.elementFromPoint;
@@ -6455,6 +6713,7 @@ window.ShadowDOMPolyfill = {};
 
   function Document(node) {
     Node.call(this, node);
+    this.treeScope_ = new TreeScope(this, null);
   }
   Document.prototype = Object.create(Node.prototype);
 
@@ -6534,7 +6793,15 @@ window.ShadowDOMPolyfill = {};
   if (document.registerElement) {
     var originalRegisterElement = document.registerElement;
     Document.prototype.registerElement = function(tagName, object) {
-      var prototype = object.prototype;
+      var prototype, extendsOption;
+      if (object !== undefined) {
+        prototype = object.prototype;
+        extendsOption = object.extends;
+      }
+
+      if (!prototype)
+        prototype = Object.create(HTMLElement.prototype);
+
 
       // If we already used the object as a prototype for another custom
       // element.
@@ -6595,13 +6862,13 @@ window.ShadowDOMPolyfill = {};
       });
 
       var p = {prototype: newPrototype};
-      if (object.extends)
-        p.extends = object.extends;
+      if (extendsOption)
+        p.extends = extendsOption;
 
       function CustomElementConstructor(node) {
         if (!node) {
-          if (object.extends) {
-            return document.createElement(object.extends, tagName);
+          if (extendsOption) {
+            return document.createElement(extendsOption, tagName);
           } else {
             return document.createElement(tagName);
           }
@@ -6800,6 +7067,31 @@ window.ShadowDOMPolyfill = {};
   registerWrapper(OriginalWindow, Window);
 
   scope.wrappers.Window = Window;
+
+})(window.ShadowDOMPolyfill);
+
+/**
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var unwrap = scope.unwrap;
+
+  // DataTransfer (Clipboard in old Blink/WebKit) has a single method that
+  // requires wrapping. Since it is only a method we do not need a real wrapper,
+  // we can just override the method.
+
+  var OriginalDataTransfer = window.DataTransfer || window.Clipboard;
+  var OriginalDataTransferSetDragImage =
+      OriginalDataTransfer.prototype.setDragImage;
+
+  OriginalDataTransfer.prototype.setDragImage = function(image, x, y) {
+    OriginalDataTransferSetDragImage.call(this, unwrap(image), x, y);
+  };
 
 })(window.ShadowDOMPolyfill);
 
@@ -7693,30 +7985,18 @@ scope.ShadowCSS = ShadowCSS;
   window.wrap = window.unwrap = function(n){
     return n;
   }
-
-  var originalCreateShadowRoot = Element.prototype.webkitCreateShadowRoot;
-  Element.prototype.webkitCreateShadowRoot = function() {
-    var elderRoot = this.webkitShadowRoot;
-    var root = originalCreateShadowRoot.call(this);
-    root.olderShadowRoot = elderRoot;
-    root.host = this;
-    CustomElements.watchShadow(this);
-    return root;
-  }
-
-  Object.defineProperties(Element.prototype, {
-    shadowRoot: {
-      get: function() {
-        return this.webkitShadowRoot;
-      }
-    },
-    createShadowRoot: {
-      value: function() {
-        return this.webkitCreateShadowRoot();
-      }
+  
+  addEventListener('DOMContentLoaded', function() {
+    if (CustomElements.useNative === false) {
+      var originalCreateShadowRoot = Element.prototype.createShadowRoot;
+      Element.prototype.createShadowRoot = function() {
+        var root = originalCreateShadowRoot.call(this);
+        CustomElements.watchShadow(this);
+        return root;
+      };
     }
   });
-
+  
   window.templateContent = function(inTemplate) {
     // if MDV exists, it may need to boostrap this template to reveal content
     if (window.HTMLTemplateElement && HTMLTemplateElement.bootstrap) {
@@ -9564,23 +9844,38 @@ window.HTMLImports = window.HTMLImports || {flags:{}};
     },
     fetch: function(url, elt) {
       flags.load && console.log('fetch', url, elt);
-      var receiveXhr = function(err, resource) {
-        this.receive(url, elt, err, resource);
-      }.bind(this);
-      xhr.load(url, receiveXhr);
-      // TODO(sorvell): blocked on
-      // https://code.google.com/p/chromium/issues/detail?id=257221
-      // xhr'ing for a document makes scripts in imports runnable; otherwise
-      // they are not; however, it requires that we have doctype=html in
-      // the import which is unacceptable. This is only needed on Chrome
-      // to avoid the bug above.
-      /*
-      if (isDocumentLink(elt)) {
-        xhr.loadDocument(url, receiveXhr);
+      if (url.match(/^data:/)) {
+        // Handle Data URI Scheme
+        var pieces = url.split(',');
+        var header = pieces[0];
+        var body = pieces[1];
+        if(header.indexOf(';base64') > -1) {
+          body = atob(body);
+        } else {
+          body = decodeURIComponent(body);
+        }
+        setTimeout(function() {
+            this.receive(url, elt, null, body);
+        }.bind(this), 0);
       } else {
+        var receiveXhr = function(err, resource) {
+          this.receive(url, elt, err, resource);
+        }.bind(this);
         xhr.load(url, receiveXhr);
+        // TODO(sorvell): blocked on)
+        // https://code.google.com/p/chromium/issues/detail?id=257221
+        // xhr'ing for a document makes scripts in imports runnable; otherwise
+        // they are not; however, it requires that we have doctype=html in
+        // the import which is unacceptable. This is only needed on Chrome
+        // to avoid the bug above.
+        /*
+        if (isDocumentLink(elt)) {
+          xhr.loadDocument(url, receiveXhr);
+        } else {
+          xhr.load(url, receiveXhr);
+        }
+        */
       }
-      */
     },
     receive: function(url, elt, err, resource) {
       this.cache[url] = resource;
@@ -9852,8 +10147,15 @@ function nodeIsImport(elt) {
 }
 
 function generateScriptDataUrl(script) {
-  var scriptContent = generateScriptContent(script);
-  return 'data:text/javascript;base64,' + btoa(scriptContent);
+  var scriptContent = generateScriptContent(script), b64;
+  try {
+    b64 = btoa(scriptContent);
+  } catch(e) {
+    b64 = btoa(unescape(encodeURIComponent(scriptContent)));
+    console.warn('Script contained non-latin characters that were forced ' +
+      'to latin. Some characters may be wrong.', script);
+  }
+  return 'data:text/javascript;base64,' + b64;
 }
 
 function generateScriptContent(script) {
@@ -10698,6 +11000,7 @@ if (useNative) {
   scope.upgradeDocument = nop;
   scope.upgradeDocumentTree = nop;
   scope.takeRecords = nop;
+  scope.reservedTagList = [];
 
 } else {
 
@@ -10754,6 +11057,10 @@ if (useNative) {
       // offer guidance)
       throw new Error('document.registerElement: first argument (\'name\') must contain a dash (\'-\'). Argument provided was \'' + String(name) + '\'.');
     }
+    // prevent registering reserved names
+    if (isReservedTag(name)) {
+      throw new Error('Failed to execute \'registerElement\' on \'Document\': Registration failed for type \'' + String(name) + '\'. The type name is invalid.');
+    }
     // elements may only be registered once
     if (getRegisteredDefinition(name)) {
       throw new Error('DuplicateDefinitionError: a type with name \'' + String(name) + '\' is already registered');
@@ -10796,6 +11103,19 @@ if (useNative) {
     }
     return definition.ctor;
   }
+
+  function isReservedTag(name) {
+    for (var i = 0; i < reservedTagList.length; i++) {
+      if (name === reservedTagList[i]) {
+        return true;
+      }
+    }
+  }
+
+  var reservedTagList = [
+    'annotation-xml', 'color-profile', 'font-face', 'font-face-src',
+    'font-face-uri', 'font-face-format', 'font-face-name', 'missing-glyph'
+  ];
 
   function ancestry(extnds) {
     var extendee = getRegisteredDefinition(extnds);
@@ -11093,6 +11413,7 @@ if (!Object.__proto__ && !useNative) {
 
 // exports
 scope.instanceof = isInstance;
+scope.reservedTagList = reservedTagList;
 
 // bc
 document.register = document.registerElement;
@@ -11526,7 +11847,7 @@ scope.styleResolver = styleResolver;
  */
 (function() {
   function shadowSelector(v) {
-    return 'body ^^ ' + selector(v);
+    return 'body /shadow-deep/ ' + selector(v);
   }
   function selector(v) {
     return '[touch-action="' + v + '"]';
@@ -11548,18 +11869,31 @@ scope.styleResolver = styleResolver;
     }
   ];
   var styles = '';
-  attrib2css.forEach(function(r) {
-    if (String(r) === r) {
-      styles += selector(r) + rule(r) + '\n';
-      styles += shadowSelector(r) + rule(r) + '\n';
-    } else {
-      styles += r.selectors.map(selector) + rule(r.rule) + '\n';
-      styles += r.selectors.map(shadowSelector) + rule(r.rule) + '\n';
-    }
-  });
-  var el = document.createElement('style');
-  el.textContent = styles;
-  document.head.appendChild(el);
+  // only install stylesheet if the browser has touch action support
+  var head = document.head;
+  var hasNativePE = window.PointerEvent || window.MSPointerEvent;
+  // only add shadow selectors if shadowdom is supported
+  var hasShadowRoot = !window.ShadowDOMPolyfill && document.head.createShadowRoot;
+
+  if (hasNativePE) {
+    attrib2css.forEach(function(r) {
+      if (String(r) === r) {
+        styles += selector(r) + rule(r) + '\n';
+        if (hasShadowRoot) {
+          styles += shadowSelector(r) + rule(r) + '\n';
+        }
+      } else {
+        styles += r.selectors.map(selector) + rule(r.rule) + '\n';
+        if (hasShadowRoot) {
+          styles += r.selectors.map(shadowSelector) + rule(r.rule) + '\n';
+        }
+      }
+    });
+
+    var el = document.createElement('style');
+    el.textContent = styles;
+    document.head.appendChild(el);
+  }
 })();
 
 /*
@@ -11583,15 +11917,6 @@ scope.styleResolver = styleResolver;
  * @return {Event} A new PointerEvent of type `inType` and initialized with properties from `inDict`.
  */
 (function(scope) {
-  // test for DOM Level 4 Events
-  var NEW_MOUSE_EVENT = false;
-  var HAS_BUTTONS = false;
-  try {
-    var ev = new MouseEvent('click', {buttons: 1});
-    NEW_MOUSE_EVENT = true;
-    HAS_BUTTONS = ev.buttons === 1;
-  } catch(e) {
-  }
 
   var MOUSE_PROPS = [
     'bubbles',
@@ -11608,6 +11933,8 @@ scope.styleResolver = styleResolver;
     'metaKey',
     'button',
     'relatedTarget',
+    'pageX',
+    'pageY'
   ];
 
   var MOUSE_DEFAULTS = [
@@ -11624,74 +11951,23 @@ scope.styleResolver = styleResolver;
     false,
     false,
     0,
-    null
+    null,
+    0,
+    0
   ];
 
   function PointerEvent(inType, inDict) {
-    inDict = inDict || {};
-    // According to the w3c spec,
-    // http://www.w3.org/TR/DOM-Level-3-Events/#events-MouseEvent-button
-    // MouseEvent.button == 0 can mean either no mouse button depressed, or the
-    // left mouse button depressed.
-    //
-    // As of now, the only way to distinguish between the two states of
-    // MouseEvent.button is by using the deprecated MouseEvent.which property, as
-    // this maps mouse buttons to positive integers > 0, and uses 0 to mean that
-    // no mouse button is held.
-    //
-    // MouseEvent.which is derived from MouseEvent.button at MouseEvent creation,
-    // but initMouseEvent does not expose an argument with which to set
-    // MouseEvent.which. Calling initMouseEvent with a buttonArg of 0 will set
-    // MouseEvent.button == 0 and MouseEvent.which == 1, breaking the expectations
-    // of app developers.
-    //
-    // The only way to propagate the correct state of MouseEvent.which and
-    // MouseEvent.button to a new MouseEvent.button == 0 and MouseEvent.which == 0
-    // is to call initMouseEvent with a buttonArg value of -1.
-    //
-    // This is fixed with DOM Level 4's use of buttons
-    var buttons;
-    if (inDict.buttons || HAS_BUTTONS) {
-      buttons = inDict.buttons;
-    } else {
-      switch (inDict.which) {
-        case 1: buttons = 1; break;
-        case 2: buttons = 4; break;
-        case 3: buttons = 2; break;
-        default: buttons = 0;
-      }
+    inDict = inDict || Object.create(null);
+
+    var e = document.createEvent('Event');
+    e.initEvent(inType, inDict.bubbles || false, inDict.cancelable || false);
+
+    // define inherited MouseEvent properties
+    for(var i = 0, p; i < MOUSE_PROPS.length; i++) {
+      p = MOUSE_PROPS[i];
+      e[p] = inDict[p] || MOUSE_DEFAULTS[i];
     }
-
-    var e;
-    if (NEW_MOUSE_EVENT) {
-      e = new MouseEvent(inType, inDict);
-    } else {
-      e = document.createEvent('MouseEvent');
-
-      // import values from the given dictionary
-      var props = {}, p;
-      for(var i = 0; i < MOUSE_PROPS.length; i++) {
-        p = MOUSE_PROPS[i];
-        props[p] = inDict[p] || MOUSE_DEFAULTS[i];
-      }
-
-      // define the properties inherited from MouseEvent
-      e.initMouseEvent(
-        inType, props.bubbles, props.cancelable, props.view, props.detail,
-        props.screenX, props.screenY, props.clientX, props.clientY, props.ctrlKey,
-        props.altKey, props.shiftKey, props.metaKey, props.button, props.relatedTarget
-      );
-    }
-
-    // make the event pass instanceof checks
-    e.__proto__ = PointerEvent.prototype;
-
-    // define the buttons property according to DOM Level 3 spec
-    if (!HAS_BUTTONS) {
-      // IE 10 has buttons on MouseEvent.prototype as a getter w/o any setting
-      // mechanism
-      Object.defineProperty(e, 'buttons', {get: function(){ return buttons; }, enumerable: true});
-    }
+    e.buttons = inDict.buttons || 0;
 
     // Spec requires that pointers without pressure specified use 0.5 for down
     // state and 0 for up state.
@@ -11699,26 +11975,25 @@ scope.styleResolver = styleResolver;
     if (inDict.pressure) {
       pressure = inDict.pressure;
     } else {
-      pressure = buttons ? 0.5 : 0;
+      pressure = e.buttons ? 0.5 : 0;
     }
 
+    // add x/y properties aliased to clientX/Y
+    e.x = e.clientX;
+    e.y = e.clientY;
+
     // define the properties of the PointerEvent interface
-    Object.defineProperties(e, {
-      pointerId: { value: inDict.pointerId || 0, enumerable: true },
-      width: { value: inDict.width || 0, enumerable: true },
-      height: { value: inDict.height || 0, enumerable: true },
-      pressure: { value: pressure, enumerable: true },
-      tiltX: { value: inDict.tiltX || 0, enumerable: true },
-      tiltY: { value: inDict.tiltY || 0, enumerable: true },
-      pointerType: { value: inDict.pointerType || '', enumerable: true },
-      hwTimestamp: { value: inDict.hwTimestamp || 0, enumerable: true },
-      isPrimary: { value: inDict.isPrimary || false, enumerable: true }
-    });
+    e.pointerId = inDict.pointerId || 0;
+    e.width = inDict.width || 0;
+    e.height = inDict.height || 0;
+    e.pressure = pressure;
+    e.tiltX = inDict.tiltX || 0;
+    e.tiltY = inDict.tiltY || 0;
+    e.pointerType = inDict.pointerType || '';
+    e.hwTimestamp = inDict.hwTimestamp || 0;
+    e.isPrimary = inDict.isPrimary || false;
     return e;
   }
-
-  // PointerEvent extends MouseEvent
-  PointerEvent.prototype = Object.create(MouseEvent.prototype);
 
   // attach to window
   if (!scope.PointerEvent) {
@@ -11830,7 +12105,9 @@ scope.styleResolver = styleResolver;
     'type',
     'target',
     'currentTarget',
-    'which'
+    'which',
+    'pageX',
+    'pageY'
   ];
 
   var CLONE_DEFAULTS = [
@@ -11865,6 +12142,8 @@ scope.styleResolver = styleResolver;
     '',
     null,
     null,
+    0,
+    0,
     0
   ];
 
@@ -11883,13 +12162,12 @@ scope.styleResolver = styleResolver;
    *   - pointercancel: a pointer will no longer generate events
    */
   var dispatcher = {
-    targets: new WeakMap(),
-    handledEvents: new WeakMap(),
     pointermap: new scope.PointerMap(),
-    eventMap: {},
+    eventMap: Object.create(null),
+    captureInfo: Object.create(null),
     // Scope objects for native events.
     // This exists for ease of testing.
-    eventSources: {},
+    eventSources: Object.create(null),
     eventSourceList: [],
     /**
      * Add a new event source that will generate pointer events.
@@ -11979,7 +12257,7 @@ scope.styleResolver = styleResolver;
       // This is used to prevent multiple dispatch of pointerevents from
       // platform events. This can happen when two elements in different scopes
       // are set up to create pointer events, which is relevant to Shadow DOM.
-      if (this.handledEvents.get(inEvent)) {
+      if (inEvent._handledByPE) {
         return;
       }
       var type = inEvent.type;
@@ -11987,7 +12265,7 @@ scope.styleResolver = styleResolver;
       if (fn) {
         fn(inEvent);
       }
-      this.handledEvents.set(inEvent, true);
+      inEvent._handledByPE = true;
     },
     // set up event listeners
     listen: function(target, events) {
@@ -12018,14 +12296,14 @@ scope.styleResolver = styleResolver;
      */
     makeEvent: function(inType, inEvent) {
       // relatedTarget must be null if pointer is captured
-      if (this.captureInfo) {
+      if (this.captureInfo[inEvent.pointerId]) {
         inEvent.relatedTarget = null;
       }
       var e = new PointerEvent(inType, inEvent);
       if (inEvent.preventDefault) {
         e.preventDefault = inEvent.preventDefault;
       }
-      this.targets.set(e, this.targets.get(inEvent) || inEvent.target);
+      e._target = e._target || inEvent.target;
       return e;
     },
     // make and dispatch an event in one call
@@ -12041,7 +12319,7 @@ scope.styleResolver = styleResolver;
      *    properties.
      */
     cloneEvent: function(inEvent) {
-      var eventCopy = {}, p;
+      var eventCopy = Object.create(null), p;
       for (var i = 0; i < CLONE_PROPS.length; i++) {
         p = CLONE_PROPS[i];
         eventCopy[p] = inEvent[p] || CLONE_DEFAULTS[i];
@@ -12065,33 +12343,32 @@ scope.styleResolver = styleResolver;
     getTarget: function(inEvent) {
       // if pointer capture is set, route all events for the specified pointerId
       // to the capture target
-      if (this.captureInfo) {
-        if (this.captureInfo.id === inEvent.pointerId) {
-          return this.captureInfo.target;
-        }
-      }
-      return this.targets.get(inEvent);
+      return this.captureInfo[inEvent.pointerId] || inEvent._target;
     },
     setCapture: function(inPointerId, inTarget) {
-      if (this.captureInfo) {
-        this.releaseCapture(this.captureInfo.id);
+      if (this.captureInfo[inPointerId]) {
+        this.releaseCapture(inPointerId);
       }
-      this.captureInfo = {id: inPointerId, target: inTarget};
-      var e = new PointerEvent('gotpointercapture', { bubbles: true });
+      this.captureInfo[inPointerId] = inTarget;
+      var e = document.createEvent('Event');
+      e.initEvent('gotpointercapture', true, false);
+      e.pointerId = inPointerId;
       this.implicitRelease = this.releaseCapture.bind(this, inPointerId);
       document.addEventListener('pointerup', this.implicitRelease);
       document.addEventListener('pointercancel', this.implicitRelease);
-      this.targets.set(e, inTarget);
+      e._target = inTarget;
       this.asyncDispatchEvent(e);
     },
     releaseCapture: function(inPointerId) {
-      if (this.captureInfo && this.captureInfo.id === inPointerId) {
-        var e = new PointerEvent('lostpointercapture', { bubbles: true });
-        var t = this.captureInfo.target;
-        this.captureInfo = null;
+      var t = this.captureInfo[inPointerId];
+      if (t) {
+        var e = document.createEvent('Event');
+        e.initEvent('lostpointercapture', true, false);
+        e.pointerId = inPointerId;
+        this.captureInfo[inPointerId] = undefined;
         document.removeEventListener('pointerup', this.implicitRelease);
         document.removeEventListener('pointercancel', this.implicitRelease);
-        this.targets.set(e, t);
+        e._target = t;
         this.asyncDispatchEvent(e);
       }
     },
@@ -12108,7 +12385,7 @@ scope.styleResolver = styleResolver;
       }
     },
     asyncDispatchEvent: function(inEvent) {
-      setTimeout(this.dispatchEvent.bind(this, inEvent), 0);
+      requestAnimationFrame(this.dispatchEvent.bind(this, inEvent));
     }
   };
   dispatcher.boundHandler = dispatcher.eventHandler.bind(dispatcher);
@@ -12198,7 +12475,11 @@ scope.styleResolver = styleResolver;
     },
     // register all touch-action = none nodes on document load
     installOnLoad: function() {
-      document.addEventListener('DOMContentLoaded', this.installNewSubtree.bind(this, document));
+      document.addEventListener('readystatechange', function() {
+        if (document.readyState === 'complete') {
+          this.installNewSubtree(document);
+        }
+      }.bind(this));
     },
     isElement: function(n) {
       return n.nodeType === Node.ELEMENT_NODE;
@@ -12247,6 +12528,13 @@ scope.styleResolver = styleResolver;
   // radius around touchend that swallows mouse events
   var DEDUP_DIST = 25;
 
+  var WHICH_TO_BUTTONS = [0, 1, 4, 2];
+
+  var HAS_BUTTONS = false;
+  try {
+    HAS_BUTTONS = new MouseEvent('test', {buttons: 1}).buttons === 1;
+  } catch (e) {}
+
   // handler block for native mouse events
   var mouseEvents = {
     POINTER_ID: 1,
@@ -12288,6 +12576,9 @@ scope.styleResolver = styleResolver;
       e.pointerId = this.POINTER_ID;
       e.isPrimary = true;
       e.pointerType = this.POINTER_TYPE;
+      if (!HAS_BUTTONS) {
+        e.buttons = WHICH_TO_BUTTONS[e.which] || 0;
+      }
       return e;
     },
     mousedown: function(inEvent) {
@@ -12352,7 +12643,7 @@ scope.styleResolver = styleResolver;
 
 (function(scope) {
   var dispatcher = scope.dispatcher;
-  var findTarget = scope.findTarget;
+  var captureInfo = dispatcher.captureInfo;
   var allShadows = scope.targetFinding.allShadows.bind(scope.targetFinding);
   var pointermap = dispatcher.pointermap;
   var touchMap = Array.prototype.map.call.bind(Array.prototype.map);
@@ -12370,7 +12661,6 @@ scope.styleResolver = styleResolver;
   
   // handler block for native touch events
   var touchEvents = {
-    scrollType: new WeakMap(),
     events: [
       'touchstart',
       'touchmove',
@@ -12395,21 +12685,21 @@ scope.styleResolver = styleResolver;
       var a = el.getAttribute(ATTRIB);
       var st = this.touchActionToScrollType(a);
       if (st) {
-        this.scrollType.set(el, st);
+        el._scrollType = st;
         dispatcher.listen(el, this.events);
         // set touch-action on shadows as well
         allShadows(el).forEach(function(s) {
-          this.scrollType.set(s, st);
+          s._scrollType = st;
           dispatcher.listen(s, this.events);
         }, this);
       }
     },
     elementRemoved: function(el) {
-      this.scrollType['delete'](el);
+      el._scrollType = undefined;
       dispatcher.unlisten(el, this.events);
       // remove touch-action from shadow
       allShadows(el).forEach(function(s) {
-        this.scrollType['delete'](s);
+        s._scrollType = undefined;
         dispatcher.unlisten(s, this.events);
       }, this);
     },
@@ -12419,9 +12709,9 @@ scope.styleResolver = styleResolver;
       var oldSt = this.touchActionToScrollType(oldValue);
       // simply update scrollType if listeners are already established
       if (st && oldSt) {
-        this.scrollType.set(el, st);
+        el._scrollType = st;
         allShadows(el).forEach(function(s) {
-          this.scrollType.set(s, st);
+          s._scrollType = st;
         }, this);
       } else if (oldSt) {
         this.elementRemoved(el);
@@ -12483,44 +12773,59 @@ scope.styleResolver = styleResolver;
         clearTimeout(this.resetId);
       }
     },
+    typeToButtons: function(type) {
+      var ret = 0;
+      if (type === 'touchstart' || type === 'touchmove') {
+        ret = 1;
+      }
+      return ret;
+    },
+    findTarget: function(ev) {
+      if (this.currentTouchEvent.type === 'touchstart') {
+        return this.currentTouchEvent.target;
+      }
+      return scope.findTarget(ev);
+    },
     touchToPointer: function(inTouch) {
+      var cte = this.currentTouchEvent;
       var e = dispatcher.cloneEvent(inTouch);
       // Spec specifies that pointerId 1 is reserved for Mouse.
       // Touch identifiers can start at 0.
       // Add 2 to the touch identifier for compatibility.
-      e.pointerId = inTouch.identifier + 2;
-      e.target = findTarget(e);
+      var id = e.pointerId = inTouch.identifier + 2;
+      e.target = captureInfo[id] || this.findTarget(e);
       e.bubbles = true;
       e.cancelable = true;
       e.detail = this.clickCount;
-      e.button = 0;
-      e.buttons = 1;
+      e.buttons = this.typeToButtons(cte.type);
       e.width = inTouch.webkitRadiusX || inTouch.radiusX || 0;
       e.height = inTouch.webkitRadiusY || inTouch.radiusY || 0;
       e.pressure = inTouch.webkitForce || inTouch.force || 0.5;
       e.isPrimary = this.isPrimaryTouch(inTouch);
       e.pointerType = this.POINTER_TYPE;
+      // forward touch preventDefaults
+      var self = this;
+      e.preventDefault = function() {
+        self.scrolling = false;
+        self.firstXY = null;
+        cte.preventDefault();
+      };
       return e;
     },
     processTouches: function(inEvent, inFunction) {
       var tl = inEvent.changedTouches;
-      var pointers = touchMap(tl, this.touchToPointer, this);
-      // forward touch preventDefaults
-      pointers.forEach(function(p) {
-        p.preventDefault = function() {
-          this.scrolling = false;
-          this.firstXY = null;
-          inEvent.preventDefault();
-        };
-      }, this);
-      pointers.forEach(inFunction, this);
+      this.currentTouchEvent = inEvent;
+      for (var i = 0, t; i < tl.length; i++) {
+        t = tl[i];
+        inFunction.call(this, this.touchToPointer(t));
+      }
     },
     // For single axis scrollers, determines whether the element should emit
     // pointer events or behave as a scroller
     shouldScroll: function(inEvent) {
       if (this.firstXY) {
         var ret;
-        var scrollAxis = this.scrollType.get(inEvent.currentTarget);
+        var scrollAxis = inEvent.currentTarget._scrollType;
         if (scrollAxis === 'none') {
           // this element is a touch-action: none, should never scroll
           ret = false;
@@ -12567,7 +12872,7 @@ scope.styleResolver = styleResolver;
           // index in pointermap.
           if (key !== 1 && !this.findTouch(tl, key - 2)) {
             var p = value.out;
-            d.push(this.touchToPointer(p));
+            d.push(p);
           }
         }, this);
         d.forEach(this.cancelOut, this);
@@ -12783,8 +13088,7 @@ scope.styleResolver = styleResolver;
   var dispatcher = scope.dispatcher;
 
   // only activate if this platform does not have pointer events
-  if (window.navigator.pointerEnabled === undefined) {
-    Object.defineProperty(window.navigator, 'pointerEnabled', {value: true, enumerable: true});
+  if (window.PointerEvent !== scope.PointerEvent) {
 
     if (window.navigator.msPointerEnabled) {
       var tp = window.navigator.msMaxTouchPoints;
@@ -13164,7 +13468,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       // must clone events to keep the (possibly shadowed) target correct for
       // async dispatching
       var e = this.cloneEvent(inEvent);
-      setTimeout(this.runQueue.bind(this, inHandlerFns, e), 0);
+      requestAnimationFrame(this.runQueue.bind(this, inHandlerFns, e));
     },
     // Dispatch the queued events
     runQueue: function(inHandlers, inEvent) {
@@ -13225,10 +13529,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       }
     },
     asyncDispatchEvent: function(inEvent, inTarget) {
-      var fn = function() {
-        this.dispatchEvent(inEvent, inTarget);
-      }.bind(this);
-      setTimeout(fn, 0);
+      requestAnimationFrame(this.dispatchEvent.bind(this, inEvent, inTarget));
     },
     preventTap: function(inPointerId) {
       var t = this.recognizers.tap;
@@ -13238,9 +13539,11 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   };
   dispatcher.boundHandler = dispatcher.eventHandler.bind(dispatcher);
+  // recognizers call into the dispatcher and load later
+  // solve the chicken and egg problem by having registerScopes module run last
+  dispatcher.registerQueue = [];
+  dispatcher.immediateRegister = false;
   scope.dispatcher = dispatcher;
-  var registerQueue = [];
-  var immediateRegister = false;
   /**
    * Enable gesture events for a given scope, typically
    * [ShadowRoots](https://dvcs.w3.org/hg/webcomponents/raw-file/tip/spec/shadow/index.html#shadow-root-object).
@@ -13251,22 +13554,17 @@ PointerGestureEvent.prototype.preventTap = function() {
    * support on.
    */
   scope.register = function(inScope) {
-    if (immediateRegister) {
+    if (dispatcher.immediateRegister) {
       var pe = window.PointerEventsPolyfill;
       if (pe) {
         pe.register(inScope);
       }
       scope.dispatcher.registerTarget(inScope);
     } else {
-      registerQueue.push(inScope);
+      dispatcher.registerQueue.push(inScope);
     }
   };
-  // wait to register scopes until recognizers load
-  document.addEventListener('DOMContentLoaded', function() {
-    immediateRegister = true;
-    registerQueue.push(document);
-    registerQueue.forEach(scope.register);
-  });
+  scope.register(document);
 })(window.PointerGestures);
 
 /*
@@ -13283,9 +13581,19 @@ PointerGestureEvent.prototype.preventTap = function() {
  * @class hold
  */
 /**
- * Milliseconds pointer has been held down.
+ * Type of pointer that made the holding event.
+ * @type String
+ * @property pointerType
+ */
+/**
+ * Screen X axis position of the held pointer
  * @type Number
- * @property holdTime
+ * @property clientX
+ */
+/**
+ * Screen Y axis position of the held pointer
+ * @type Number
+ * @property clientY
  */
 /**
  * Type of pointer that made the holding event.
@@ -13299,14 +13607,14 @@ PointerGestureEvent.prototype.preventTap = function() {
  * @extends hold
  */
 /**
+ * Milliseconds pointer has been held down.
+ * @type Number
+ * @property holdTime
+ */
+/**
  * This event is fired when a held pointer is released or moved.
  *
  * @class released
- */
-/**
- * Type of pointer that made the holding event.
- * @type String
- * @property pointerType
  */
 
 (function(scope) {
@@ -13366,7 +13674,9 @@ PointerGestureEvent.prototype.preventTap = function() {
     },
     fireHold: function(inType, inHoldTime) {
       var p = {
-        pointerType: this.heldPointer.pointerType
+        pointerType: this.heldPointer.pointerType,
+        clientX: this.heldPointer.clientX,
+        clientY: this.heldPointer.clientY
       };
       if (inHoldTime) {
         p.holdTime = inHoldTime;
@@ -13838,7 +14148,8 @@ PointerGestureEvent.prototype.preventTap = function() {
         pointers.push(p);
       });
       var dist = 0;
-      var points = {};
+      // start with at least two pointers
+      var points = {a: pointers[0], b: pointers[1]};
       var x, y, d;
       for (var i = 0; i < pointers.length; i++) {
         var a = pointers[i];
@@ -13918,6 +14229,7 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (inEvent.isPrimary && !inEvent.tapPrevented) {
         pointermap.set(inEvent.pointerId, {
           target: inEvent.target,
+          buttons: inEvent.buttons,
           x: inEvent.clientX,
           y: inEvent.clientY
         });
@@ -13933,15 +14245,19 @@ PointerGestureEvent.prototype.preventTap = function() {
         }
       }
     },
-    shouldTap: function(e) {
+    shouldTap: function(e, downState) {
       if (!e.tapPrevented) {
-        // only allow left click to tap for mouse
-        return e.pointerType === 'mouse' ? e.buttons === 1 : true;
+        if (e.pointerType === 'mouse') {
+          // only allow left click to tap for mouse
+          return downState.buttons === 1;
+        } else {
+          return true;
+        }
       }
     },
     pointerup: function(inEvent) {
       var start = pointermap.get(inEvent.pointerId);
-      if (start && this.shouldTap(inEvent)) {
+      if (start && this.shouldTap(inEvent, start)) {
         var t = scope.findLCA(start.target, inEvent.target);
         if (t) {
           var e = dispatcher.makeEvent('tap', {
@@ -13980,19 +14296,43 @@ PointerGestureEvent.prototype.preventTap = function() {
   dispatcher.registerRecognizer('tap', tap);
 })(window.PointerGestures);
 
-// Copyright 2011 Google Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+/**
+ * Because recognizers are loaded after dispatcher, we have to wait to register
+ * scopes until after all the recognizers.
+ */
+(function(scope) {
+  var dispatcher = scope.dispatcher;
+  function registerScopes() {
+    dispatcher.immediateRegister = true;
+    var rq = dispatcher.registerQueue;
+    rq.forEach(scope.register);
+    rq.length = 0;
+  }
+  if (document.readyState === 'complete') {
+    registerScopes();
+  } else {
+    // register scopes after a steadystate is reached
+    // less MutationObserver churn
+    document.addEventListener('readystatechange', function() {
+      if (document.readyState === 'complete') {
+        registerScopes();
+      }
+    });
+  }
+})(window.PointerGestures);
+
+// Copyright (c) 2014 The Polymer Project Authors. All rights reserved.
+// This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+// The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+// The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+// Code distributed by Google as part of the polymer project is also
+// subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 
 (function(global) {
   'use strict';
@@ -14007,69 +14347,24 @@ PointerGestureEvent.prototype.preventTap = function() {
     return typeof node.getElementById === 'function' ? node : null;
   }
 
-  // JScript does not have __proto__. We wrap all object literals with
-  // createObject which uses Object.create, Object.defineProperty and
-  // Object.getOwnPropertyDescriptor to create a new object that does the exact
-  // same thing. The main downside to this solution is that we have to extract
-  // all those property descriptors for IE.
-  var createObject = ('__proto__' in {}) ?
-      function(obj) { return obj; } :
-      function(obj) {
-        var proto = obj.__proto__;
-        if (!proto)
-          return obj;
-        var newObject = Object.create(proto);
-        Object.getOwnPropertyNames(obj).forEach(function(name) {
-          Object.defineProperty(newObject, name,
-                               Object.getOwnPropertyDescriptor(obj, name));
-        });
-        return newObject;
-      };
-
-  // IE does not support have Document.prototype.contains.
-  if (typeof document.contains != 'function') {
-    Document.prototype.contains = function(node) {
-      if (node === this || node.parentNode === this)
-        return true;
-      return this.documentElement.contains(node);
-    }
-  }
-
   Node.prototype.bind = function(name, observable) {
     console.error('Unhandled binding to Node: ', this, name, observable);
   };
 
-  function unbind(node, name) {
-    var bindings = node.bindings;
-    if (!bindings) {
-      node.bindings = {};
-      return;
-    }
+  function updateBindings(node, name, binding) {
+    var bindings = node.bindings_;
+    if (!bindings)
+      bindings = node.bindings_ = {};
 
-    var binding = bindings[name];
-    if (!binding)
-      return;
+    if (bindings[name])
+      binding[name].close();
 
-    binding.close();
-    bindings[name] = undefined;
+    return bindings[name] = binding;
   }
 
-  Node.prototype.unbind = function(name) {
-    unbind(this, name);
-  };
-
-  Node.prototype.unbindAll = function() {
-    if (!this.bindings)
-      return;
-    var names = Object.keys(this.bindings);
-    for (var i = 0; i < names.length; i++) {
-      var binding = this.bindings[names[i]];
-      if (binding)
-        binding.close();
-    }
-
-    this.bindings = {};
-  };
+  function returnBinding(node, name, binding) {
+    return binding;
+  }
 
   function sanitizeValue(value) {
     return value == null ? '' : value;
@@ -14085,6 +14380,19 @@ PointerGestureEvent.prototype.preventTap = function() {
     };
   }
 
+  var maybeUpdateBindings = returnBinding;
+
+  Object.defineProperty(Platform, 'enableBindingsReflection', {
+    get: function() {
+      return maybeUpdateBindings === updateBindings;
+    },
+    set: function(enable) {
+      maybeUpdateBindings = enable ? updateBindings : returnBinding;
+      return enable;
+    },
+    configurable: true
+  });
+
   Text.prototype.bind = function(name, value, oneTime) {
     if (name !== 'textContent')
       return Node.prototype.bind.call(this, name, value, oneTime);
@@ -14092,9 +14400,9 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateText(this, value);
 
-    unbind(this, 'textContent');
-    updateText(this, value.open(textBinding(this)));
-    return this.bindings.textContent = value;
+    var observable = value;
+    updateText(this, observable.open(textBinding(this)));
+    return maybeUpdateBindings(this, name, observable);
   }
 
   function updateAttribute(el, name, conditional, value) {
@@ -14125,11 +14433,12 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateAttribute(this, name, conditional, value);
 
-    unbind(this, name);
-    updateAttribute(this, name, conditional,
-        value.open(attributeBinding(this, name, conditional)));
 
-    return this.bindings[name] = value;
+    var observable = value;
+    updateAttribute(this, name, conditional,
+        observable.open(attributeBinding(this, name, conditional)));
+
+    return maybeUpdateBindings(this, name, observable);
   };
 
   var checkboxEventType;
@@ -14198,15 +14507,13 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
     input.addEventListener(eventType, eventHandler);
 
-    var capturedClose = observable.close;
-    observable.close = function() {
-      if (!capturedClose)
-        return;
-      input.removeEventListener(eventType, eventHandler);
+    return {
+      close: function() {
+        input.removeEventListener(eventType, eventHandler);
+        observable.close();
+      },
 
-      observable.close = capturedClose;
-      observable.close();
-      capturedClose = undefined;
+      observable_: observable
     }
   }
 
@@ -14250,10 +14557,10 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (input.tagName === 'INPUT' &&
         input.type === 'radio') {
       getAssociatedRadioButtons(input).forEach(function(radio) {
-        var checkedBinding = radio.bindings.checked;
+        var checkedBinding = radio.bindings_.checked;
         if (checkedBinding) {
           // Set the value directly to avoid an infinite call stack.
-          checkedBinding.setValue(false);
+          checkedBinding.observable_.setValue(false);
         }
       });
     }
@@ -14263,7 +14570,6 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (name !== 'value' && name !== 'checked')
       return HTMLElement.prototype.bind.call(this, name, value, oneTime);
 
-
     this.removeAttribute(name);
     var sanitizeFn = name == 'checked' ? booleanSanitize : sanitizeValue;
     var postEventFn = name == 'checked' ? checkedPostEvent : noop;
@@ -14271,13 +14577,15 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateInput(this, name, value, sanitizeFn);
 
-    unbind(this, name);
-    bindInputEvent(this, name, value, postEventFn);
+
+    var observable = value;
+    var binding = bindInputEvent(this, name, observable, postEventFn);
     updateInput(this, name,
-                value.open(inputBinding(this, name, sanitizeFn)),
+                observable.open(inputBinding(this, name, sanitizeFn)),
                 sanitizeFn);
 
-    return this.bindings[name] = value;
+    // Checkboxes may need to update bindings of other checkboxes.
+    return updateBindings(this, name, binding);
   }
 
   HTMLTextAreaElement.prototype.bind = function(name, value, oneTime) {
@@ -14289,12 +14597,11 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateInput(this, 'value', value);
 
-    unbind(this, 'value');
-    bindInputEvent(this, 'value', value);
+    var observable = value;
+    var binding = bindInputEvent(this, 'value', observable);
     updateInput(this, 'value',
-                value.open(inputBinding(this, 'value', sanitizeValue)));
-
-    return this.bindings.value = value;
+                observable.open(inputBinding(this, 'value', sanitizeValue)));
+    return maybeUpdateBindings(this, name, binding);
   }
 
   function updateOption(option, value) {
@@ -14303,18 +14610,18 @@ PointerGestureEvent.prototype.preventTap = function() {
     var selectBinding;
     var oldValue;
     if (parentNode instanceof HTMLSelectElement &&
-        parentNode.bindings &&
-        parentNode.bindings.value) {
+        parentNode.bindings_ &&
+        parentNode.bindings_.value) {
       select = parentNode;
-      selectBinding = select.bindings.value;
+      selectBinding = select.bindings_.value;
       oldValue = select.value;
     }
 
     option.value = sanitizeValue(value);
 
     if (select && select.value != oldValue) {
-      selectBinding.setValue(select.value);
-      selectBinding.discardChanges();
+      selectBinding.observable_.setValue(select.value);
+      selectBinding.observable_.discardChanges();
       Platform.performMicrotaskCheckpoint();
     }
   }
@@ -14334,10 +14641,10 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateOption(this, value);
 
-    unbind(this, 'value');
-    bindInputEvent(this, 'value', value);
-    updateOption(this, value.open(optionBinding(this)));
-    return this.bindings.value = value;
+    var observable = value;
+    var binding = bindInputEvent(this, 'value', observable);
+    updateOption(this, observable.open(optionBinding(this)));
+    return maybeUpdateBindings(this, name, binding);
   }
 
   HTMLSelectElement.prototype.bind = function(name, value, oneTime) {
@@ -14352,27 +14659,22 @@ PointerGestureEvent.prototype.preventTap = function() {
     if (oneTime)
       return updateInput(this, name, value);
 
-    unbind(this, name);
-    bindInputEvent(this, name, value);
+    var observable = value;
+    var binding = bindInputEvent(this, name, observable);
     updateInput(this, name,
-                value.open(inputBinding(this, name)));
-    return this.bindings[name] = value;
+                observable.open(inputBinding(this, name)));
+
+    // Option update events may need to access select bindings.
+    return updateBindings(this, name, binding);
   }
 })(window);
 
-// Copyright 2011 Google Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Copyright (c) 2014 The Polymer Project Authors. All rights reserved.
+// This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+// The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+// The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+// Code distributed by Google as part of the polymer project is also
+// subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
 
 (function(global) {
   'use strict';
@@ -14837,8 +15139,13 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (oneTime)
         return;
 
-      this.unbind('ref');
-      return this.bindings.ref = value;
+      if (!this.bindings_) {
+        this.bindings_ = { ref: value };
+      } else {
+        this.bindings_.ref = value;
+      }
+
+      return value;
     },
 
     processBindingDirectives_: function(directives) {
@@ -14849,7 +15156,6 @@ PointerGestureEvent.prototype.preventTap = function() {
         if (this.iterator_) {
           this.iterator_.close();
           this.iterator_ = undefined;
-          this.bindings.iterator = undefined;
         }
 
         return;
@@ -14857,8 +15163,6 @@ PointerGestureEvent.prototype.preventTap = function() {
 
       if (!this.iterator_) {
         this.iterator_ = new TemplateIterator(this);
-        this.bindings = this.bindings || {};
-        this.bindings.iterator = this.iterator_;
       }
 
       this.iterator_.updateDependencies(directives, this.model_);
@@ -14871,14 +15175,16 @@ PointerGestureEvent.prototype.preventTap = function() {
       return this.iterator_;
     },
 
-    createInstance: function(model, bindingDelegate, delegate_,
-                             instanceBindings_) {
+    createInstance: function(model, bindingDelegate, delegate_) {
       if (bindingDelegate)
         delegate_ = this.newDelegate_(bindingDelegate);
 
       if (!this.refContent_)
         this.refContent_ = this.ref_.content;
       var content = this.refContent_;
+      if (content.firstChild === null)
+        return emptyInstance;
+
       var map = this.bindingMap_;
       if (!map || map.content !== content) {
         // TODO(rafaelw): Setup a MutationObserver on content to detect
@@ -14893,21 +15199,32 @@ PointerGestureEvent.prototype.preventTap = function() {
       var instance = stagingDocument.createDocumentFragment();
       instance.templateCreator_ = this;
       instance.protoContent_ = content;
-
-      var instanceRecord = {
+      instance.bindings_ = [];
+      instance.terminator_ = null;
+      var instanceRecord = instance.templateInstance_ = {
         firstNode: null,
         lastNode: null,
         model: model
       };
 
       var i = 0;
+      var collectTerminator = false;
       for (var child = content.firstChild; child; child = child.nextSibling) {
+        // The terminator of the instance is the clone of the last child of the
+        // content. If the last child is an active template, it may produce
+        // instances as a result of production, so simply collecting the last
+        // child of the instance after it has finished producing may be wrong.
+        if (child.nextSibling === null)
+          collectTerminator = true;
+
         var clone = cloneAndBindInstance(child, instance, stagingDocument,
                                          map.children[i++],
                                          model,
                                          delegate_,
-                                         instanceBindings_);
+                                         instance.bindings_);
         clone.templateInstance_ = instanceRecord;
+        if (collectTerminator)
+          instance.terminator_ = clone;
       }
 
       instanceRecord.firstNode = instance.firstChild;
@@ -14942,7 +15259,8 @@ PointerGestureEvent.prototype.preventTap = function() {
     clear: function() {
       this.model_ = undefined;
       this.delegate_ = undefined;
-      this.bindings_ = undefined;
+      if (this.bindings_ && this.bindings_.ref)
+        this.bindings_.ref.close()
       this.refContent_ = undefined;
       if (!this.iterator_)
         return;
@@ -15047,9 +15365,14 @@ PointerGestureEvent.prototype.preventTap = function() {
       var pathString = s.slice(startIndex + 2, endIndex).trim();
       tokens.push(oneTime); // ONE_TIME?
       onlyOneTime = onlyOneTime && oneTime;
-      tokens.push(Path.get(pathString)); // PATH
       var delegateFn = prepareBindingFn &&
                        prepareBindingFn(pathString, name, node);
+      // Don't try to parse the expression if there's a prepareBinding function
+      if (delegateFn == null) {
+        tokens.push(Path.get(pathString)); // PATH
+      } else {
+        tokens.push(null);
+      }
       tokens.push(delegateFn); // DELEGATE_FN
       lastIndex = endIndex + 2;
     }
@@ -15267,14 +15590,14 @@ PointerGestureEvent.prototype.preventTap = function() {
     }
   });
 
+  var emptyInstance = document.createDocumentFragment();
+  emptyInstance.bindings_ = [];
+  emptyInstance.terminator_ = null;
+
   function TemplateIterator(templateElement) {
     this.closed = false;
     this.templateElement_ = templateElement;
-
-    // Flattened array of tuples:
-    //   <instanceTerminatorNode, [bindingsSetupByInstance]>
-    this.terminators = [];
-
+    this.instances = [];
     this.deps = undefined;
     this.iteratedValue = [];
     this.presentValue = undefined;
@@ -15369,63 +15692,53 @@ PointerGestureEvent.prototype.preventTap = function() {
                                                         this.iteratedValue));
     },
 
-    getTerminatorAt: function(index) {
+    getLastInstanceNode: function(index) {
       if (index == -1)
         return this.templateElement_;
-      var terminator = this.terminators[index*2];
+      var instance = this.instances[index];
+      var terminator = instance.terminator_;
+      if (!terminator)
+        return this.getLastInstanceNode(index - 1);
+
       if (terminator.nodeType !== Node.ELEMENT_NODE ||
           this.templateElement_ === terminator) {
         return terminator;
       }
 
-      var subIterator = terminator.iterator_;
-      if (!subIterator)
+      var subtemplateIterator = terminator.iterator_;
+      if (!subtemplateIterator)
         return terminator;
 
-      return subIterator.getTerminatorAt(subIterator.terminators.length/2 - 1);
+      return subtemplateIterator.getLastTemplateNode();
     },
 
-    // TODO(rafaelw): If we inserting sequences of instances we can probably
-    // avoid lots of calls to getTerminatorAt(), or cache its result.
-    insertInstanceAt: function(index, fragment, instanceNodes,
-                               instanceBindings) {
-      var previousTerminator = this.getTerminatorAt(index - 1);
-      var terminator = previousTerminator;
-      if (fragment)
-        terminator = fragment.lastChild || terminator;
-      else if (instanceNodes)
-        terminator = instanceNodes[instanceNodes.length - 1] || terminator;
+    getLastTemplateNode: function() {
+      return this.getLastInstanceNode(this.instances.length - 1);
+    },
 
-      this.terminators.splice(index*2, 0, terminator, instanceBindings);
+    insertInstanceAt: function(index, fragment) {
+      var previousInstanceLast = this.getLastInstanceNode(index - 1);
       var parent = this.templateElement_.parentNode;
-      var insertBeforeNode = previousTerminator.nextSibling;
+      this.instances.splice(index, 0, fragment);
 
-      if (fragment) {
-        parent.insertBefore(fragment, insertBeforeNode);
-      } else if (instanceNodes) {
-        for (var i = 0; i < instanceNodes.length; i++)
-          parent.insertBefore(instanceNodes[i], insertBeforeNode);
-      }
+      parent.insertBefore(fragment, previousInstanceLast.nextSibling);
     },
 
     extractInstanceAt: function(index) {
-      var instanceNodes = [];
-      var previousTerminator = this.getTerminatorAt(index - 1);
-      var terminator = this.getTerminatorAt(index);
-      instanceNodes.instanceBindings = this.terminators[index*2 + 1];
-      this.terminators.splice(index*2, 2);
-
+      var previousInstanceLast = this.getLastInstanceNode(index - 1);
+      var lastNode = this.getLastInstanceNode(index);
       var parent = this.templateElement_.parentNode;
-      while (terminator !== previousTerminator) {
-        var node = previousTerminator.nextSibling;
-        if (node == terminator)
-          terminator = previousTerminator;
+      var instance = this.instances.splice(index, 1)[0];
 
-        parent.removeChild(node);
-        instanceNodes.push(node);
+      while (lastNode !== previousInstanceLast) {
+        var node = previousInstanceLast.nextSibling;
+        if (node == lastNode)
+          lastNode = previousInstanceLast;
+
+        instance.appendChild(parent.removeChild(node));
       }
 
-      return instanceNodes;
+      return instance;
     },
 
     getDelegateFn: function(fn) {
@@ -15459,46 +15772,50 @@ PointerGestureEvent.prototype.preventTap = function() {
                                delegate.prepareInstancePositionChanged);
       }
 
+      // Instance Removals
       var instanceCache = new Map;
       var removeDelta = 0;
-      splices.forEach(function(splice) {
-        splice.removed.forEach(function(model) {
-          var instanceNodes =
-              this.extractInstanceAt(splice.index + removeDelta);
-          instanceCache.set(model, instanceNodes);
-        }, this);
+      for (var i = 0; i < splices.length; i++) {
+        var splice = splices[i];
+        var removed = splice.removed;
+        for (var j = 0; j < removed.length; j++) {
+          var model = removed[j];
+          var instance = this.extractInstanceAt(splice.index + removeDelta);
+          if (instance !== emptyInstance) {
+            instanceCache.set(model, instance);
+          }
+        }
 
         removeDelta -= splice.addedCount;
-      }, this);
+      }
 
-      splices.forEach(function(splice) {
+      // Instance Insertions
+      for (var i = 0; i < splices.length; i++) {
+        var splice = splices[i];
         var addIndex = splice.index;
         for (; addIndex < splice.index + splice.addedCount; addIndex++) {
           var model = this.iteratedValue[addIndex];
-          var fragment = undefined;
-          var instanceNodes = instanceCache.get(model);
-          var instanceBindings;
-          if (instanceNodes) {
+          var instance = instanceCache.get(model);
+          if (instance) {
             instanceCache.delete(model);
-            instanceBindings = instanceNodes.instanceBindings;
           } else {
-            instanceBindings = [];
-            if (this.instanceModelFn_)
+            if (this.instanceModelFn_) {
               model = this.instanceModelFn_(model);
+            }
 
-            if (model !== undefined) {
-              fragment = template.createInstance(model, undefined, delegate,
-                                                 instanceBindings);
+            if (model === undefined) {
+              instance = emptyInstance;
+            } else {
+              instance = template.createInstance(model, undefined, delegate);
             }
           }
 
-          this.insertInstanceAt(addIndex, fragment, instanceNodes,
-                                instanceBindings);
+          this.insertInstanceAt(addIndex, instance);
         }
-      }, this);
+      }
 
-      instanceCache.forEach(function(instanceNodes) {
-        this.closeInstanceBindings(instanceNodes.instanceBindings);
+      instanceCache.forEach(function(instance) {
+        this.closeInstanceBindings(instance);
       }, this);
 
       if (this.instancePositionChangedFn_)
@@ -15506,17 +15823,11 @@ PointerGestureEvent.prototype.preventTap = function() {
     },
 
     reportInstanceMoved: function(index) {
-      var previousTerminator = this.getTerminatorAt(index - 1);
-      var terminator = this.getTerminatorAt(index);
-      if (previousTerminator === terminator)
-        return; // instance has zero nodes.
+      var instance = this.instances[index];
+      if (instance === emptyInstance)
+        return;
 
-      // We must use the first node of the instance, because any subsequent
-      // nodes may have been generated by sub-templates.
-      // TODO(rafaelw): This is brittle WRT instance mutation -- e.g. if the
-      // first node was removed by script.
-      var templateInstance = previousTerminator.nextSibling.templateInstance;
-      this.instancePositionChangedFn_(templateInstance, index);
+      this.instancePositionChangedFn_(instance.templateInstance_, index);
     },
 
     reportInstancesMoved: function(splices) {
@@ -15544,16 +15855,17 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (offset == 0)
         return;
 
-      var length = this.terminators.length / 2;
+      var length = this.instances.length;
       while (index < length) {
         this.reportInstanceMoved(index);
         index++;
       }
     },
 
-    closeInstanceBindings: function(instanceBindings) {
-      for (var i = 0; i < instanceBindings.length; i++) {
-        instanceBindings[i].close();
+    closeInstanceBindings: function(instance) {
+      var bindings = instance.bindings_;
+      for (var i = 0; i < bindings.length; i++) {
+        bindings[i].close();
       }
     },
 
@@ -15569,11 +15881,11 @@ PointerGestureEvent.prototype.preventTap = function() {
       if (this.closed)
         return;
       this.unobserve();
-      for (var i = 1; i < this.terminators.length; i += 2) {
-        this.closeInstanceBindings(this.terminators[i]);
+      for (var i = 0; i < this.instances.length; i++) {
+        this.closeInstanceBindings(this.instances[i]);
       }
 
-      this.terminators.length = 0;
+      this.instances.length = 0;
       this.closeDeps();
       this.templateElement_.iterator_ = undefined;
       this.closed = true;
@@ -17324,14 +17636,17 @@ function flush() {
 };
 
 // polling dirty checker
-var FLUSH_POLL_INTERVAL = 125;
-window.addEventListener('WebComponentsReady', function() {
-  flush();
-  // flush periodically if platform does not have object observe.
-  if (!Observer.hasObjectObserve) {
+// flush periodically if platform does not have object observe.
+if (!Observer.hasObjectObserve) {
+  var FLUSH_POLL_INTERVAL = 125;
+  window.addEventListener('WebComponentsReady', function() {
+    flush();
     scope.flushPoll = setInterval(flush, FLUSH_POLL_INTERVAL);
-  }
-});
+  });
+} else {
+  // make flush a no-op when we have Object.observe
+  flush = function() {};
+}
 
 if (window.CustomElements && !CustomElements.useNative) {
   var originalImportNode = Document.prototype.importNode;
