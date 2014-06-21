@@ -2,15 +2,31 @@
 
 ### Web Components Polyfills for use with [Browserify](https://github.com/substack/node-browserify).
 
-This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify-compatible package. This is not the full Polymer framework, just the platform, which provides the polyfills for next-generation web technology (plus some other stuff).
+This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify-compatible package. This is not the full Polymer framework (e.g. no  `<polymer-element>`), it's just the platform, which provides the polyfills for next-generation web technology (plus some other stuff).
 
-Polyfills will be regularly updated to latest development versions. As there is no sensible way to do semver, versions will be tagged by timestamp: `0.YYYYMMDD.patch`. Patch version may be incremented if there's a critical problem with the build.
+![image](https://cloud.githubusercontent.com/assets/43438/3347655/b0cfdd68-f8f1-11e3-85ee-e467eb09c366.png)
 
-## Installation
+## Features
 
-```
-> npm install --save polyfill-webcomponents
-```
+* CustomElements
+* ShadowDOM
+* HTMLTemplates
+* Model Driven Views
+* WeakMap
+* PointerEvents
+* PointerGestures
+* HTMLImports
+
+Due to nature of the browser, isolated encapsulation of these polyfills is not possible, thus be warned
+**this modifies your entire browser environment** i.e. does not play well with others.
+
+## Documentation
+
+See the documentation specifically for the **Platform** on the [Polymer website.](http://www.polymer-project.org/docs/polymer/polymer.html)
+
+## Versioning
+
+Polyfills will be regularly updated to latest development versions. As there is no sensible way to do semver, versions will be tagged by timestamp: `0.YYYYMMDD.patch`. Patch version may be incremented if there's a critical problem with the build. If you want me to cut a new build to incorporate a particular update, please just open an issue.
 
 ## Usage
 
@@ -22,17 +38,24 @@ Use in-browser only with [browserify](https://github.com/substack/node-browserif
 // polyfill your browser environment
 var Platform = require('polyfill-webcomponents')
 // Platform is polymer's proprietary namespace, contains some helpers
+// Note this will creates a bunch of globals.
 ```
 
-Simply require polyfill-webcomponents anywhere your code needs webcomponent support.
+Simply `require('polyfill-webcomponents')` anywhere your code depends on webcomponents support.
 
-You can safely require polyfill-webcomponents multiple times, it will only add the polyfills once.
+You can safely `require('polyfill-webcomponents')` multiple times, it will only add the polyfills once.
+
+## Installation
+
+```
+> npm install polyfill-webcomponents
+```
 
 ### Use as a peer dependency
 
-It is recommended to set `polyfill-webcomponents` as a [Peer Dependency](http://domenic.me/2013/02/08/peer-dependencies/) for anything except your top-level application.
+Peer dependencies allow child modules to require that the parent module has a compatible version installed. Despite the npm team no longer being keen on peer-dependencies, I believe this is a perfect use-case for them and I recommended you set `polyfill-webcomponents` as a [Peer Dependency](http://domenic.me/2013/02/08/peer-dependencies/) for anything except your top-level application. 
 
-Because `polyfill-webcomponents` necessarily modifies your global state, and will only load once, it doesn't make sense to have multiple copies bundled in your app. Peer dependencies allows a child modules to use the version loaded in the parent module.
+Because `polyfill-webcomponents` necessarily modifies your global state, and has been configured to only apply the polyfills once, it doesn't make much sense to have multiple copies of it bundled in your app.
 
 Add this to your `package.json`:
 
@@ -42,29 +65,9 @@ Add this to your `package.json`:
   },
 ```
 
-## Documentation
-
-See the documentation specifically for the **Platform** on the [Polymer website.](http://www.polymer-project.org/docs/polymer/polymer.html)
-
-## Features
-
-Due to nature of the browser, proper encapsulation of these polyfills is not possible.
-**This modifies your entire browser environment** with polyfills for:
-
-* CustomElements
-* ShadowDOM
-* HTMLTemplates
-* Model Driven Views
-* WeakMap
-* PointerEvents
-* PointerGestures
-* HTMLImports
-
-Go to [polymer-project.org](http://www.polymer-project.org/) for API details.
-
 ## Browser Compatibility
 
-This is alpha software. Support/performance is a bit fickle in everything but Chrome & Canary, and you may even experience dramatic differences between versions of Chrome. For best experience you'll want to at least enable:
+Polymer is alpha software. Support/performance is a bit fickle in everything but Chrome & Canary, and you may even experience dramatic differences between versions of Chrome. For best experience you'll want to at least enable:
 
 * chrome://flags/#enable-experimental-web-platform-features
 * chrome://flags/#enable-html-imports
@@ -82,7 +85,7 @@ These polyfills work ([with caveats](http://www.polymer-project.org/compatibilit
 * Mobile Safari
 * Internet Explorer 10+
 
-Do the web a favour, insist on only supporting Evergreen Browsers in your upcoming project.
+**Do the web a favour, insist on only supporting Evergreen Browsers in your upcoming project.**
 
 [See Polymer's documentation for more information](http://www.polymer-project.org/compatibility.html).
 
