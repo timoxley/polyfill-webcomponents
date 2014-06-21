@@ -4,7 +4,7 @@
 
 This is the [Polymer Platform](https://github.com/Polymer/polymer) in a browserify-compatible package. This is not the full Polymer framework (e.g. no  `<polymer-element>`), it's just the platform, which provides the polyfills for next-generation web technology (plus some other stuff).
 
-![image](https://cloud.githubusercontent.com/assets/43438/3347655/b0cfdd68-f8f1-11e3-85ee-e467eb09c366.png)
+![image](https://cloud.githubusercontent.com/assets/43438/3347708/0b705ae2-f8f5-11e3-8492-759e74607aff.png)
 
 ## Features
 
