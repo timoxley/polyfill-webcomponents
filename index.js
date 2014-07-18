@@ -411,8 +411,9 @@ if (typeof WeakMap === 'undefined') {
     if (privateToken !== constructorIsPrivate)
       throw Error('Use Path.get to retrieve path objects');
 
-    if (parts.length)
-      Array.prototype.push.apply(this, parts.slice());
+    for (var i = 0; i < parts.length; i++) {
+      this.push(String(parts[i]));
+    }
 
     if (hasEval && this.length) {
       this.getValueFrom = this.compiledGetValueFromFn();
@@ -898,7 +899,7 @@ if (typeof WeakMap === 'undefined') {
 
   var runningMicrotaskCheckpoint = false;
 
-  var hasDebugForceFullDelivery = hasObserve && (function() {
+  var hasDebugForceFullDelivery = hasObserve && hasEval && (function() {
     try {
       eval('%RunMicrotasks()');
       return true;
@@ -5288,6 +5289,17 @@ window.ShadowDOMPolyfill = {};
 
       var df = frag(contextElement, text);
       contextElement.insertBefore(df, refNode);
+    },
+
+    get hidden() {
+      return this.hasAttribute('hidden');
+    },
+    set hidden(v) {
+      if (v) {
+        this.setAttribute('hidden', '');
+      } else {
+        this.removeAttribute('hidden');
+      }
     }
   });
 
@@ -5442,6 +5454,42 @@ window.ShadowDOMPolyfill = {};
     registerWrapper(OriginalHTMLContentElement, HTMLContentElement);
 
   scope.wrappers.HTMLContentElement = HTMLContentElement;
+})(window.ShadowDOMPolyfill);
+
+/*
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var HTMLElement = scope.wrappers.HTMLElement;
+  var mixin = scope.mixin;
+  var registerWrapper = scope.registerWrapper;
+  var wrapHTMLCollection = scope.wrapHTMLCollection;
+  var unwrap = scope.unwrap;
+
+  var OriginalHTMLFormElement = window.HTMLFormElement;
+
+  function HTMLFormElement(node) {
+    HTMLElement.call(this, node);
+  }
+  HTMLFormElement.prototype = Object.create(HTMLElement.prototype);
+  mixin(HTMLFormElement.prototype, {
+    get elements() {
+      // Note: technically this should be an HTMLFormControlsCollection, but
+      // that inherits from HTMLCollection, so should be good enough. Spec:
+      // http://www.whatwg.org/specs/web-apps/current-work/multipage/common-dom-interfaces.html#htmlformcontrolscollection
+      return wrapHTMLCollection(unwrap(this).elements);
+    }
+  });
+
+  registerWrapper(OriginalHTMLFormElement, HTMLFormElement,
+                  document.createElement('form'));
+
+  scope.wrappers.HTMLFormElement = HTMLFormElement;
 })(window.ShadowDOMPolyfill);
 
 // Copyright 2013 The Polymer Authors. All rights reserved.
@@ -6659,6 +6707,9 @@ window.ShadowDOMPolyfill = {};
     invalidate: function() {
       if (!this.dirty) {
         this.dirty = true;
+        var parentRenderer = this.parentRenderer;
+        if (parentRenderer)
+          parentRenderer.invalidate();
         pendingDirtyRenderers.push(this);
         if (renderTimer)
           return;
@@ -7572,9 +7623,35 @@ window.ShadowDOMPolyfill = {};
   var OriginalDataTransferSetDragImage =
       OriginalDataTransfer.prototype.setDragImage;
 
-  OriginalDataTransfer.prototype.setDragImage = function(image, x, y) {
-    OriginalDataTransferSetDragImage.call(this, unwrap(image), x, y);
-  };
+  if (OriginalDataTransferSetDragImage) {
+    OriginalDataTransfer.prototype.setDragImage = function(image, x, y) {
+      OriginalDataTransferSetDragImage.call(this, unwrap(image), x, y);
+    };
+  }
+
+})(window.ShadowDOMPolyfill);
+
+/**
+ * Copyright 2014 The Polymer Authors. All rights reserved.
+ * Use of this source code is goverened by a BSD-style
+ * license that can be found in the LICENSE file.
+ */
+
+(function(scope) {
+  'use strict';
+
+  var registerWrapper = scope.registerWrapper;
+  var unwrap = scope.unwrap;
+
+  var OriginalFormData = window.FormData;
+
+  function FormData(formElement) {
+    this.impl = new OriginalFormData(formElement && unwrap(formElement));
+  }
+
+  registerWrapper(OriginalFormData, FormData, new OriginalFormData());
+
+  scope.wrappers.FormData = FormData;
 
 })(window.ShadowDOMPolyfill);
 
@@ -8080,7 +8157,7 @@ var ShadowCSS = {
     cssText = this.insertPolyfillHostInCssText(cssText);
     cssText = this.convertColonHost(cssText);
     cssText = this.convertColonHostContext(cssText);
-    cssText = this.convertCombinators(cssText);
+    cssText = this.convertShadowDOMSelectors(cssText);
     if (scopeSelector) {
       var self = this, cssText;
       withCssRules(cssText, function(rules) {
@@ -8173,11 +8250,12 @@ var ShadowCSS = {
     return host + part.replace(polyfillHost, '') + suffix;
   },
   /*
-   * Convert ^ and ^^ combinators by replacing with space.
+   * Convert combinators like ::shadow and pseudo-elements like ::content
+   * by replacing with space.
   */
-  convertCombinators: function(cssText) {
-    for (var i=0; i < combinatorsRe.length; i++) {
-      cssText = cssText.replace(combinatorsRe[i], ' ');
+  convertShadowDOMSelectors: function(cssText) {
+    for (var i=0; i < shadowDOMSelectorsRe.length; i++) {
+      cssText = cssText.replace(shadowDOMSelectorsRe[i], ' ');
     }
     return cssText;
   },
@@ -8332,13 +8410,13 @@ var selectorRe = /([^{]*)({[\s\S]*?})/gim,
     cssCommentRe = /\/\*[^*]*\*+([^/*][^*]*\*+)*\//gim,
     // TODO(sorvell): remove either content or comment
     cssCommentNextSelectorRe = /\/\*\s*@polyfill ([^*]*\*+([^/*][^*]*\*+)*\/)([^{]*?){/gim,
-    cssContentNextSelectorRe = /polyfill-next-selector[^}]*content\:[\s]*'([^']*)'[^}]*}([^{]*?){/gim,
+    cssContentNextSelectorRe = /polyfill-next-selector[^}]*content\:[\s]*['|"]([^'"]*)['|"][^}]*}([^{]*?){/gim,
     // TODO(sorvell): remove either content or comment
     cssCommentRuleRe = /\/\*\s@polyfill-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
-    cssContentRuleRe = /(polyfill-rule)[^}]*(content\:[\s]*'([^']*)'[^;]*;)[^}]*}/gim,
+    cssContentRuleRe = /(polyfill-rule)[^}]*(content\:[\s]*['|"]([^'"]*)['|"][^;]*;)[^}]*}/gim,
     // TODO(sorvell): remove either content or comment
     cssCommentUnscopedRuleRe = /\/\*\s@polyfill-unscoped-rule([^*]*\*+([^/*][^*]*\*+)*)\//gim,
-    cssContentUnscopedRuleRe = /(polyfill-unscoped-rule)[^}]*(content\:[\s]*'([^']*)'[^;]*;)[^}]*}/gim,
+    cssContentUnscopedRuleRe = /(polyfill-unscoped-rule)[^}]*(content\:[\s]*['|"]([^'"]*)['|"][^;]*;)[^}]*}/gim,
     cssPseudoRe = /::(x-[^\s{,(]*)/gim,
     cssPartRe = /::part\(([^)]*)\)/gim,
     // note: :host pre-processed to -shadowcsshost.
@@ -8357,13 +8435,14 @@ var selectorRe = /([^{]*)({[\s\S]*?})/gim,
     polyfillHostNoCombinator = polyfillHost + '-no-combinator',
     polyfillHostRe = new RegExp(polyfillHost, 'gim'),
     polyfillHostContextRe = new RegExp(polyfillHostContext, 'gim'),
-    combinatorsRe = [
+    shadowDOMSelectorsRe = [
       /\^\^/g,
       /\^/g,
       /\/shadow\//g,
       /\/shadow-deep\//g,
       /::shadow/g,
-      /\/deep\//g
+      /\/deep\//g,
+      /::content/g
     ];
 
 function stylesToCssText(styles, preserveComments) {
@@ -10825,15 +10904,16 @@ function nodeIsImport(elt) {
 }
 
 function generateScriptDataUrl(script) {
-  var scriptContent = generateScriptContent(script), b64;
+  var scriptContent = generateScriptContent(script);
+  var b64 = 'data:text/javascript';
+  // base64 may be smaller, but does not handle unicode characters
+  // attempt base64 first, fall back to escaped text
   try {
-    b64 = btoa(scriptContent);
+    b64 += (';base64,' + btoa(scriptContent));
   } catch(e) {
-    b64 = btoa(unescape(encodeURIComponent(scriptContent)));
-    console.warn('Script contained non-latin characters that were forced ' +
-      'to latin. Some characters may be wrong.', script);
+    b64 += (';charset=utf-8,' + encodeURIComponent(scriptContent));
   }
-  return 'data:text/javascript;base64,' + b64;
+  return b64;
 }
 
 function generateScriptContent(script) {
@@ -11191,10 +11271,13 @@ if (useNative) {
 scope.hasNative = hasNative;
 scope.useNative = useNative;
 scope.importer = importer;
-scope.whenImportsReady = whenImportsReady;
 scope.IMPORT_LINK_TYPE = IMPORT_LINK_TYPE;
 scope.isImportLoaded = isImportLoaded;
 scope.importLoader = importLoader;
+scope.whenReady = whenImportsReady;
+
+// deprecated
+scope.whenImportsReady = whenImportsReady;
 
 })(window.HTMLImports);
 
@@ -11683,7 +11766,7 @@ scope.takeRecords = takeRecords;
  */
 
 /**
- * Implements `document.register`
+ * Implements `document.registerElement`
  * @module CustomElements
 */
 
