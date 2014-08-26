@@ -1,21 +1,36 @@
 var assert = require('assert')
 
 var Platform = require('../')
+require('templatebinding')
 assert.strictEqual(window.Platform, Platform)
 
-document.addEventListener('DOMContentLoaded', function() {
-  var t = document.getElementById('greeting');
-  var model = {
-    salutations: [
-      { what: 'Hello', who: 'World' },
-      { what: 'GoodBye', who: 'DOM APIs' },
-      { what: 'Hello', who: 'Declarative' },
-      { what: 'GoodBye', who: 'Imperative' }
-    ]
-  };
-  t.model = model;
-
-  // Needed to detect model changes if Object.observe
-  // is not available in the JS VM.
-  Platform.performMicrotaskCheckpoint();
-});
+    function createShadowRoot(node) {
+      return window.ShadowDOMPolyfill ? node.createShadowRoot() :
+          node.createShadowRoot();
+    }
+    
+    document.addEventListener('DOMContentLoaded', function() {
+      var host = document.querySelector('#host');
+      var root = createShadowRoot(host);
+      var template = document.querySelector('template');
+      root.appendChild(template.createInstance());
+      
+      var innerHost = root.querySelector('#innerHost');
+      var innerRoot = createShadowRoot(innerHost);
+      innerRoot.innerHTML = '<content select="*"></content>';
+      
+      
+      var t = root.querySelector('template');
+      t.model = {
+        person: {name: 'Bob'}
+      };
+      setTimeout(function() {
+        console.log('notifyChanges');
+        assert.equal(innerHost.children.length, 3, 
+          'Template stamped into shadowDOM');
+        if (window.ShadowDOMPolyfill) {
+          assert.equal(innerHost.impl.children.length, 3, 
+          'Template stamping distributed to composed tree under ShadowDOMPolyfill');
+        }
+      }, 500);
+    });
