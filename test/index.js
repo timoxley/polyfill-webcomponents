@@ -1,36 +1,41 @@
 var assert = require('assert')
 
-var Platform = require('../')
-require('templatebinding')
-assert.strictEqual(window.Platform, Platform)
+require('../')
 
-    function createShadowRoot(node) {
-      return window.ShadowDOMPolyfill ? node.createShadowRoot() :
-          node.createShadowRoot();
-    }
-    
-    document.addEventListener('DOMContentLoaded', function() {
-      var host = document.querySelector('#host');
-      var root = createShadowRoot(host);
-      var template = document.querySelector('template');
-      root.appendChild(template.createInstance());
-      
-      var innerHost = root.querySelector('#innerHost');
-      var innerRoot = createShadowRoot(innerHost);
-      innerRoot.innerHTML = '<content select="*"></content>';
-      
-      
-      var t = root.querySelector('template');
-      t.model = {
-        person: {name: 'Bob'}
-      };
-      setTimeout(function() {
-        console.log('notifyChanges');
-        assert.equal(innerHost.children.length, 3, 
-          'Template stamped into shadowDOM');
-        if (window.ShadowDOMPolyfill) {
-          assert.equal(innerHost.impl.children.length, 3, 
-          'Template stamping distributed to composed tree under ShadowDOMPolyfill');
-        }
-      }, 500);
-    });
+if (!hasTemplateBinding()) {
+  require('templatebinding')
+}
+
+var Expressions = typeof PolymerExpressions !== 'undefined'
+  ? PolymerExpressions
+  : require('polymer-expressions')
+
+function hasTemplateBinding() {
+  var t = document.createElement('template')
+  return 'model' in t
+}
+
+var t = document.getElementById('text');
+var t = document.querySelector('template');
+t.bindingDelegate = new Expressions()
+t.model = {
+  text: [
+    { value: 'Fee' },
+    { value: 'Fi' },
+    { value: 'Fo' },
+    { value: 'Fum' }
+  ]
+};
+
+var b = document.getElementById('rotateText');
+b.addEventListener('click', function() {
+  t.model.text.push(t.model.text.shift());
+});
+
+setTimeout(function() {
+  var ul = document.querySelector('ul')
+  for (var i = 1, l = ul.children.length; i < l; i ++) {
+    var child = ul.children[i];
+    assert.equal(child.innerText,  'Value: ' + t.model.text[i - 1].value)
+  }
+}, 100)

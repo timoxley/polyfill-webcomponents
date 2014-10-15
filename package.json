@@ -16,7 +16,8 @@
   "license": "BSD-2-Clause",
   "devDependencies": {
     "beefy": "^1.1.0",
-    "templatebinding": "~0.3.4"
+    "polymer-expressions": "*",
+    "templatebinding": "*"
   },
   "directories": {
     "test": "test"

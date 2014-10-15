@@ -10,20 +10,20 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 <html>
   <head>
     <title>template distribute</title>
-    <script src="build.js"></script>
   </head>
   <body>
   
-  <div id="host"></div>
-  
-  <template id="template">
-    <div id="innerHost">
-      <div>Template Repeat</div>
-      <template bind="{{person}}">
-        <div>{{name}}</div>
-      </template>
-    </div>
-  </template>
+ <h1>Bind To Text</h1>
+
+    <ul>
+    <template id="text" repeat="{{ text }}">
+      <li>Value: {{ value }}</li>
+    </template>
+    </ul>
+
+    <button id="rotateText">Rotate</button>
+
+    <script src="build.js"></script>
   </body>
 </html>
 
