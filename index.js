@@ -4998,7 +4998,7 @@ if (WebComponents.flags.shadow) {
   };
   global.JsMutationObserver = JsMutationObserver;
   if (!global.MutationObserver) global.MutationObserver = JsMutationObserver;
-})(this);
+})(window);
 
 window.HTMLImports = window.HTMLImports || {
   flags: {}
