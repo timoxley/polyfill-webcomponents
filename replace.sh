@@ -4,15 +4,7 @@ set -e
 
 ### Here be some dodgy modifications for browserify compatibility ###
 
-cat build/platform.concat.js > index.src.js
-
-
-# temporary workaround for assumptions about
-# this/window context:
-# https://github.com/Polymer/ShadowDOM/pull/282 
-sed -i bak -e 's/var ShadowDOMPolyfill/window.ShadowDOMPolyfill/' index.src.js
-sed -i bak -e 's/this.ShadowDOMPolyfill/window.ShadowDOMPolyfill/g' index.src.js
-sed -i bak -e 's/})(this);/})(window);/g' index.src.js
+cat build/webcomponents.js > index.src.js
 
 # remove source mapping
 sed -i bak -e 's/\/\/@ sourceMappingURL=platform\.concat.js\.map//g' index.src.js

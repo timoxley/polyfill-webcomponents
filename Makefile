@@ -7,22 +7,10 @@ index.js: build
 update: build/tools
 	-cd build/tools && sh bin/pull-all.sh
 
-build: build/platform.concat.js
-
-build/platform.concat.js: build/tools/components/platform-dev/build/platform-lite.concat.js
+build:
+	-cd build/tools/components/webcomponentsjs && git checkout .
+	cp -f build/tools/components/webcomponentsjs/webcomponents.js build/webcomponents.js
 	sh replace.sh
-
-build/tools/components/platform-dev/build/platform-lite.concat.js: build/tools/components/platform-dev
-	cd build/tools/components/platform-dev && npm install
-	cd build/tools/components/platform-dev && cp build-lite.json build-lite.old.json
-	cd build/tools/components/platform-dev && cp build.json build-lite.json
-	cd build/tools/components/platform-dev && grunt build-lite
-	cd build/tools/components/platform-dev && mv build-lite.old.json build-lite.json
-	cp -f build/tools/components/platform-dev/build/platform-lite.concat.js build/platform.concat.js
-
-build/tools/components/platform-dev:
-	-cd build/tools/components/platform-dev && git checkout .
-	-rm build/platform.concat.js
 
 build/tools:
 	-mkdir build
@@ -30,6 +18,7 @@ build/tools:
 	-cd build/tools && git checkout . && git clean -df
 
 test: build
+	node_modules/.bin/uglifyjs ./build/webcomponents.js --lint 2>&1 | grep Accide || echo "ok"
 	cd test && beefy index.js:build.js --open
 
 clean:
