@@ -1,6 +1,6 @@
 {
   "name": "polyfill-webcomponents",
-  "version": "0.20141030.1",
+  "version": "0.20141214.0",
   "description": "Web Component Polyfills courtesy of Polymer",
   "main": "index.js",
   "scripts": {
