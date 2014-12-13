@@ -8,10 +8,11 @@ cat build/webcomponents.js > index.src.js
 
 # remove source mapping
 sed -i bak -e 's/\/\/@ sourceMappingURL=platform\.concat.js\.map//g' index.src.js
+sed -i bak -e 's/window.WebComponents || {}/window.WebComponents || {flags: flags}/g' index.src.js
 # prevent double loading
 # need to wrap in whole thing in closure because browserify/esprima spits "Illegal return statement"
 # on return statement below?
-echo "module.exports = (function() {\n" > index.js
+echo "module.exports = (function(flags) {\n" > index.js
 echo "if (window.Platform) return window.Platform; // prevent double-loading\n" >> index.js
 # inject actual source
 cat index.src.js >> index.js

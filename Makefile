@@ -9,7 +9,9 @@ update: build/tools
 
 build:
 	-cd build/tools/components/webcomponentsjs && git checkout .
-	cp -f build/tools/components/webcomponentsjs/webcomponents.js build/webcomponents.js
+	-cd build/tools/components/webcomponentsjs && npm install
+	-cd build/tools/components/webcomponentsjs && ./node_modules/.bin/gulp
+	cp -f build/tools/components/webcomponentsjs/dist/webcomponents.js build/webcomponents.js
 	sh replace.sh
 
 build/tools:
@@ -18,7 +20,7 @@ build/tools:
 	-cd build/tools && git checkout . && git clean -df
 
 test: build
-	node_modules/.bin/uglifyjs ./build/webcomponents.js --lint 2>&1 | grep Accide || echo "ok"
+	node_modules/.bin/uglifyjs ./index.js --lint 2>&1 | grep Accide || echo "ok"
 	cd test && beefy index.js:build.js --open
 
 clean:

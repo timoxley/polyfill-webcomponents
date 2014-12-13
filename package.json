@@ -4,6 +4,7 @@
   "description": "Web Component Polyfills courtesy of Polymer",
   "main": "index.js",
   "scripts": {
+    "start": "make update -B && make build -B",
     "test": "make test"
   },
   "author": "Tim Oxley",
