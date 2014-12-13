@@ -5172,7 +5172,7 @@ HTMLImports.addModule(function(scope) {
 });
 
 HTMLImports.addModule(function(scope) {
-  xhr = {
+  var xhr = {
     async: true,
     ok: function(request) {
       return request.status >= 200 && request.status < 300 || request.status === 304 || request.status === 0;
@@ -5653,7 +5653,7 @@ HTMLImports.addModule(function(scope) {
   var importer = scope.importer;
   var dynamic = {
     added: function(nodes) {
-      var owner, parsed;
+      var owner, parsed, loading;
       for (var i = 0, l = nodes.length, n; i < l && (n = nodes[i]); i++) {
         if (!owner) {
           owner = n.ownerDocument;
