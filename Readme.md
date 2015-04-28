@@ -1,4 +1,10 @@
-# polyfill-webcomponents
+# polyfill-webcomponents 
+
+## Deprecated
+
+Thanks for all the support, but this package is now deprecated. polyfill-webcomponents served its purpose while there was no official equivalent, but now there is [webcomponents.js](https://www.npmjs.com/package/webcomponents.js) which has more frequent updates and is maintained by the polymer team. Whoo!
+
+----
 
 ### Web Components Polyfills for use with [Browserify](https://github.com/substack/node-browserify).
 
